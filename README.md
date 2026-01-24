@@ -79,6 +79,35 @@ python scripts/parallel_index.py check
 python scripts/parallel_index.py build
 ```
 
+
+## Linguistic annotation
+The `annotate.py` script runs tokenization, POS tagging, lemmatization, and dependency parsing via Stanford CoreNLP with [Stanza](https://stanfordnlp.github.io/stanza/).
+
+```bash
+# use a French language model to annotate Maupassant's French:
+python scripts/annotate.py data/maupassant/fr/txt data/maupassant/fr/json -l fr -f json
+
+# use an English language model to annotate the McMaster et al. transation of Maupassant:
+python scripts/stanza_annotate.py data/maupassant/en/txt data/maupassant/en/json -l en -f json
+```
+
+**Output formats**:
+- `-f json`: CoreNLP-style JSON with denormalized dependency info
+- `-f conllu`: Standard CoNLL-U for compatibility with other NLP tools
+
+JSON output includes `basicDependencies` with governor/dependent lemmas inline:
+```json
+{
+  "dependent": 3,
+  "dependentGloss": "vieux",
+  "dependentLemma": "vieux",
+  "governor": 4,
+  "governorGloss": "bibelots",
+  "governorLemma": "bibelot",
+  "dep": "amod"
+}
+```
+
 ## Index Files
 Each author directory has an `index.tsv` for parallel text alignment:
 
