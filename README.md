@@ -132,3 +132,7 @@ Maupassant French texts follow the Pléiade edition (Forestier 1987).
 McMaster et al. translations are the "Complete Short Stories" series (PG #3077-3089).
 
 Poe 1845 = *Tales* (published in Poe's lifetime). Poe 1850 = Griswold edition (posthumous, more complete).
+
+## License
+
+This project is licensed under CC BY 4.0. You are free to use, adapt, and redistribute the data with attribution.
