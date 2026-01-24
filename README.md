@@ -97,9 +97,13 @@ For Poe, the `en_edition` column indicates whether the English text is from the 
 ## Cleanup Notes
 
 ### Poe
+
 **Footnotes**: Excluded by manual cleanup, to focus on the body text and reduce noise.
+
 **Editions**: The 1845 and 1850 texts show ~5% divergence (LCS analysis). Both are retained since we don't yet know which Baudelaire used for each story.
+
 **Duplicates**: "Le Mystère de Marie Roget" appears in both `histoires_extraordinaires/` and `grotesques_serieuses/`; preliminarily these appear to be the same translation.
+
 **OCR errors**: The Novalis quote in "Marie Roget," for example, has OCR/printing errors in both editions ("gewohulich" for "gewöhnlich", etc.); there are likely to be other cases as well.
 
 Zero-width spaces in WikiSource texts:
@@ -108,7 +112,9 @@ sed -i 's/\xe2\x80\x8b//g' data/poe/en/*/txt/*.txt
 ```
 
 ### Maupassant
+
 **McMaster segmentation**: The PG volumes have TOC/body title mismatches requiring a variant lookup table in `maupassant_en.py`.
+
 **Partial coverage**: McMaster translated ~180 of Maupassant's ~300 stories. The parallel index shows which have matches.
 
 ## Sources and licensing
@@ -122,5 +128,7 @@ sed -i 's/\xe2\x80\x8b//g' data/poe/en/*/txt/*.txt
 | Poe (fr) | fr.wikisource.org | Public domain |
 
 Maupassant French texts follow the Pléiade edition (Forestier 1987).
+
 McMaster et al. translations are the "Complete Short Stories" series (PG #3077-3089).
+
 Poe 1845 = *Tales* (published in Poe's lifetime). Poe 1850 = Griswold edition (posthumous, more complete).
