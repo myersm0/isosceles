@@ -145,7 +145,8 @@ For Poe, the `en_edition` column indicates whether the English text is from the 
 ### Maupassant
 
 - **McMaster segmentation**: The PG volumes have TOC/body title mismatches requiring a variant lookup table in `maupassant_en.py`.
-- **Partial coverage**: McMaster translated ~180 of Maupassant's ~300 stories. The parallel index shows which have matches.
+- **Partial coverage**: McMaster et al. translated ~180 of Maupassant's ~300 stories. The parallel index shows which have matches.
+- **Missing French sources**: Three McMaster et al. stories have no matching French text in the Pléiade-based corpus: "The Lancer's Wife," "The Legion of Honor," and "The Thief." These may be misattributions.
 
 ### General
 
