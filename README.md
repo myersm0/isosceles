@@ -13,8 +13,7 @@ Three components:
 data/
 ├── maupassant/
 │   ├── en/
-│   │   ├── raw/          # original PG volumes
-│   │   ├── txt/          # segmented stories
+│   │   ├── txt/          # one file per story
 │   │   └── metadata.tsv
 │   ├── fr/
 │   │   ├── txt/
@@ -36,7 +35,7 @@ data/
 │   │   └── arthur_gordon_pym/
 │   │       └── txt/
 │   └── index.tsv         # parallel alignment
-└── eltec/
+└── eltec/                # not in repo; see note below
     ├── en/
     │   ├── xml/
     │   └── txt/
@@ -45,6 +44,8 @@ data/
     │   └── txt/
     └── manifest.tsv
 ```
+
+The `eltec` folder is omitted from this repository, due to its size, but you can generate its contents locally with `scripts/eltec.py` to download and clean texts from the official ELTeC project; see usage below.
 
 ## Scripts
 
@@ -81,14 +82,14 @@ python scripts/parallel_index.py build
 
 
 ## Linguistic annotation
-The `annotate.py` script runs tokenization, POS tagging, lemmatization, and dependency parsing via Stanford CoreNLP with [Stanza](https://stanfordnlp.github.io/stanza/).
+The `annotate.py` script runs tokenization, POS tagging, lemmatization, and dependency parsing via [Stanza](https://stanfordnlp.github.io/stanza/).
 
 ```bash
 # use a French language model to annotate Maupassant's French:
 python scripts/annotate.py data/maupassant/fr/txt data/maupassant/fr/json -l fr -f json
 
 # use an English language model to annotate the McMaster et al. transation of Maupassant:
-python scripts/stanza_annotate.py data/maupassant/en/txt data/maupassant/en/json -l en -f json
+python scripts/annotate.py data/maupassant/en/txt data/maupassant/en/json -l en -f json
 ```
 
 **Output formats**:
@@ -108,12 +109,17 @@ JSON output includes `basicDependencies` with governor/dependent lemmas inline:
 }
 ```
 
+**Note**: JSON output is large (~10× source text) and therefore is not included in the repository. Run annotation locally to generate.
+
+**Note**: Stanza's French model treats semicolons as sentence boundaries; the English model does not. Keep this in mind for sentence length comparisons.
+
+
 ## Index files
 Each author directory has an `index.tsv` for parallel text alignment:
 
 **maupassant/index.tsv**:
 ```
-fr_file  en_file  fr_title  en_title  collection  fr_words  en_words
+fr_file  en_file  fr_words  en_words
 ```
 
 **poe/index.tsv**:
@@ -124,31 +130,36 @@ en_file  fr_file  en_title  fr_title  fr_volume  en_edition  en_words  fr_words
 For Poe, the `en_edition` column indicates whether the English text is from the 1845 edition (Wiley & Putnam), the 1850 edition (Lowell & Griswold), or both.
 
 ## Cleanup notes
-Zero-width spaces in WikiSource texts can be cleaned up with :
+### Poe
+
+- **Footnotes**: Removed to focus on body text.
+- **Footnote markers**: Removed (e.g., `12]` artifacts from WikiSource).
+- **Editions**: The 1845 and 1850 texts show ~5% divergence (LCS analysis). Both are retained since we don't yet know which Baudelaire used for each story.
+- **Duplicates**: "Le Mystère de Marie Roget" appears in both `histoires_extraordinaires/` and `grotesques_serieuses/`; these appear to be the same translation.
+- **OCR errors**: The Novalis epigraph in "Marie Roget" has errors in both WikiSource editions ("gewohulich" for "gewöhnlich"). Other OCR artifacts likely remain. We consider these errors outside of the scope of our cleanup.
+- **Zero-width spaces**: Removed. These were present in WikiSource transcriptions:
 ```bash
-sed -i 's/\xe2\x80\x8b//g' data/poe/en/*/txt/*.txt
+  perl -pi -e 's/\xe2\x80\x8b//g' data/poe/*/*/txt/*.txt
 ```
 
-Author-specific details of post-processing cleanup that has been done:
-- Poe
-    - **Footnotes**: Excluded by manual cleanup, to focus on the body text and reduce noise.
-    - **Editions**: The 1845 and 1850 texts show ~5% divergence (LCS analysis). Both are retained since we don't yet know which Baudelaire used for each story.
-    - **Duplicates**: "Le Mystère de Marie Roget" appears in both `histoires_extraordinaires/` and `grotesques_serieuses/`; preliminarily these appear to be the same translation.
-    - **OCR errors**: The Novalis quote in "Marie Roget," for example, has OCR/printing errors in both editions ("gewohulich" for "gewöhnlich", etc.); there are likely to be other cases as well.
+### Maupassant
 
-- Maupassant
-    - **McMaster segmentation**: The PG volumes have TOC/body title mismatches requiring a variant lookup table in `maupassant_en.py`.
-    - **Partial coverage**: McMaster translated ~180 of Maupassant's ~300 stories. The parallel index shows which have matches.
+- **McMaster segmentation**: The PG volumes have TOC/body title mismatches requiring a variant lookup table in `maupassant_en.py`.
+- **Partial coverage**: McMaster translated ~180 of Maupassant's ~300 stories. The parallel index shows which have matches.
+
+### General
+
+This corpus is a work in progress. Additional cleanup will be applied as issues are discovered. See the commit history for details.
 
 ## Sources and licensing
 
 | Corpus | Source | License |
 |--------|--------|---------|
-| ELTeC | github.com/COST-ELTeC | CC-BY 4.0 |
-| Maupassant (fr) | maupassant.free.fr | Public domain |
-| Maupassant (en) | gutenberg.org | Public domain |
-| Poe (en) | en.wikisource.org | Public domain |
-| Poe (fr) | fr.wikisource.org | Public domain |
+| ELTeC | [github.com/COST-ELTeC](https://github.com/COST-ELTeC) | CC-BY 4.0 |
+| Maupassant (fr) | [maupassant.free.fr](http://maupassant.free.fr) | Public domain |
+| Maupassant (en) | [gutenberg.org](https://gutenberg.org) | Public domain |
+| Poe (en) | [en.wikisource.org](https://en.wikisource.org) | Public domain |
+| Poe (fr) | [fr.wikisource.org](https://fr.wikisource.org) | Public domain |
 
 Maupassant French texts follow the Pléiade edition (Forestier 1987).
 
@@ -156,6 +167,11 @@ McMaster et al. translations are the "Complete Short Stories" series (PG #3077-3
 
 Poe 1845 = *Tales* (published in Poe's lifetime). Poe 1850 = Griswold edition (posthumous, more complete).
 
+## Contributing
+
+Found an error? Have a suggestion? Please [open an issue](../../issues) on GitHub.
+
+
 ## License
 
-This project is licensed under CC BY 4.0. You are free to use, adapt, and redistribute the data with attribution.
+This project is licensed under [CC BY 4.0](LICENSE). You are free to use, adapt, and redistribute the data with attribution.
