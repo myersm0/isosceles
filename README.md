@@ -47,6 +47,19 @@ data/
 
 The `eltec` folder is omitted from this repository, due to its size, but you can generate its contents locally with `scripts/eltec.py` to download and clean texts from the official ELTeC project; see usage below.
 
+## Setup
+```bash
+# clone the repository:
+git clone https://github.com/YOUR_USERNAME/corpus-isosceles.git
+cd corpus-isosceles
+
+# install Python dependencies:
+pip install -r requirements.txt
+
+# download Stanza models (if running annotation):
+python -c "import stanza; stanza.download('fr'); stanza.download('en')"
+```
+
 ## Scripts
 
 ```bash
