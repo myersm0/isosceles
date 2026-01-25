@@ -129,15 +129,15 @@ en_file  fr_file  en_title  fr_title  fr_volume  en_edition  en_words  fr_words
 
 For Poe, the `en_edition` column indicates whether the English text is from the 1845 edition (Wiley & Putnam), the 1850 edition (Lowell & Griswold), or both.
 
-## Cleanup notes
+## Notes on the texts
 ### Poe
 
-- **Footnotes**: Removed to focus on body text.
-- **Footnote markers**: Removed (e.g., `12]` artifacts from WikiSource).
+- **Footnotes**: Manually removed footnotes, to focus on body text.
+- **Footnote markers**: Manually removed (e.g., `12]` artifacts from WikiSource).
 - **Editions**: The 1845 and 1850 texts show ~5% divergence (LCS analysis). Both are retained since we don't yet know which Baudelaire used for each story.
 - **Duplicates**: "Le Mystère de Marie Roget" appears in both `histoires_extraordinaires/` and `grotesques_serieuses/`; these appear to be the same translation.
 - **OCR errors**: The Novalis epigraph in "Marie Roget" has errors in both WikiSource editions ("gewohulich" for "gewöhnlich"). Other OCR artifacts likely remain. We consider these errors outside of the scope of our cleanup.
-- **Zero-width spaces**: Removed. These were present in WikiSource transcriptions:
+- **Zero-width spaces**: Manually removed. These were present in WikiSource transcriptions:
 ```bash
   perl -pi -e 's/\xe2\x80\x8b//g' data/poe/*/*/txt/*.txt
 ```
@@ -146,7 +146,12 @@ For Poe, the `en_edition` column indicates whether the English text is from the 
 
 - **McMaster segmentation**: The PG volumes have TOC/body title mismatches requiring a variant lookup table in `maupassant_en.py`.
 - **Partial coverage**: McMaster et al. translated ~180 of Maupassant's ~300 stories. The parallel index shows which have matches.
-- **Missing French sources**: Three McMaster et al. stories have no matching French text in the Pléiade-based corpus: "The Lancer's Wife," "The Legion of Honor," and "The Thief." These may be misattributions.
+- **Missing French sources**: Four McMaster et al. stories have no matching French text in the Pléiade-based corpus: "The Englishmen of Etretat", "The Lancer's Wife," "The Legion of Honor," and "The Thief." These may be misattributions.
+- **Partial translations**: A comparison of word counts between the French and English versions will reveal at least a few stories that are significantly truncated or redacted on the English side, including:
+    - "Les Dimanches d'un bourgeois de Paris" is truncated in English — the concluding section X is absent
+    - "Une Farce" has an extended framing prologue in French that is omitted in the English translation
+    - "Monsieur Parent" is evidently missing material somewhere in the middle of the English translation
+
 
 ### General
 
