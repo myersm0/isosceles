@@ -108,7 +108,7 @@ JSON output includes `basicDependencies` with governor/dependent lemmas inline:
 }
 ```
 
-## Index Files
+## Index files
 Each author directory has an `index.tsv` for parallel text alignment:
 
 **maupassant/index.tsv**:
@@ -123,7 +123,7 @@ en_file  fr_file  en_title  fr_title  fr_volume  en_edition  en_words  fr_words
 
 For Poe, the `en_edition` column indicates whether the English text is from the 1845 edition (Wiley & Putnam), the 1850 edition (Lowell & Griswold), or both.
 
-## Cleanup Notes
+## Cleanup notes
 Zero-width spaces in WikiSource texts can be cleaned up with :
 ```bash
 sed -i 's/\xe2\x80\x8b//g' data/poe/en/*/txt/*.txt
