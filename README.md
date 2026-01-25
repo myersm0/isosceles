@@ -1,4 +1,4 @@
-# corpus-isosceles
+# isosceles
 A small corpus for computational analysis of literary translation, focusing on 19th-century French-English pairs for short fiction by Maupassant and Poe.
 
 ## Structure
