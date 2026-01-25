@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: "Isosceles: A parallel corpus for computational analysis of literary translation"
+message: "If you use this corpus, please cite it using the metadata from this file."
+type: dataset
+authors:
+  - family-names: Myers
+    given-names: Michael J.
+repository-code: "https://github.com/myersm0/isosceles"
+url: "https://github.com/myersm0/isosceles"
+abstract: >-
+  A small corpus for computational analysis of literary translation, 
+  focusing on 19th-century French-English pairs. Includes Baudelaire's 
+  translations of Poe, McMaster et al.'s translations of Maupassant, 
+  and ELTeC reference corpora for native prose baselines.
+keywords:
+  - stylometry
+  - literary translation
+  - parallel corpus
+  - French literature
+  - nineteenth century
+  - Maupassant
+  - Poe
+  - Baudelaire
+  - computational literary studies
+license: CC-BY-4.0
+version: "0.1.0"
+date-released: 2026-01-25

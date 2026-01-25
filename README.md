@@ -186,6 +186,13 @@ McMaster et al. translations are the "Complete Short Stories" series (PG #3077-3
 
 Poe 1845 = *Tales* (published in Poe's lifetime). Poe 1850 = Griswold edition (posthumous, more complete).
 
+## Citation
+If you use this corpus in your research, please cite:
+
+> Myers, Michael J. (2026). *Isosceles*: A parallel corpus for computational analysis of literary translation [Data set]. GitHub. https://github.com/myersm0/isosceles
+
+A `CITATION.cff` file is included for automated citation tools.
+
 ## Contributing
 
 Found an error? Have a suggestion? Please [open an issue](../../issues) on GitHub.
