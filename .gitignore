@@ -1,2 +1,4 @@
 data/eltec
 data/maupassant/en/raw
+data/*/*/json
+data/*/*/*/json
