@@ -93,39 +93,47 @@ python scripts/parallel_index.py check
 python scripts/parallel_index.py build
 ```
 
-
 ## Linguistic annotation
-The `annotate.py` script runs tokenization, POS tagging, lemmatization, and dependency parsing via [Stanza](https://stanfordnlp.github.io/stanza/).
+The `annotate.py` script provides tokenization, POS tagging, lemmatization, and dependency parsing with multiple backend options.
 
+### Backends
+
+| Backend | Segmentation | Parsing | Quality | Use case |
+|---------|--------------|---------|---------|----------|
+| `stanza` | Stanza | Stanza | Baseline | Legacy compatibility |
+| `corenlp` | CoreNLP | CoreNLP | Poor | Not recommended |
+| `spacy` | CoreNLP | spaCy | Good | ELTeC, large corpora |
+| `spacy+llm` | CoreNLP | spaCy + Claude corrections | Best | Maupassant, Poe-Baudelaire |
+
+**Recommended approach:**
+- French: `spacy+llm` is necessary for high quality annotation
+- English: `spacy` alone is sufficient
+
+The `spacy` backend uses CoreNLP for sentence segmentation (more reliable for literary text than Stanza or spaCy alone) and spaCy transformer models (`fr_dep_news_trf`, `en_core_web_trf`) for parsing.
+
+The `spacy+llm` backend adds a correction pass using Claude Sonnet, which fixes many errors in lemmatization, dependency relations, and tree validity.
+
+### Usage
 ```bash
-# use a French language model to annotate Maupassant's French:
-python scripts/annotate.py data/maupassant/fr/txt data/maupassant/fr/json -l fr -f json
+# Set environment variables
+export CORENLP_HOME=/path/to/stanford-corenlp-4.5.x
+export ANTHROPIC_API_KEY=sk-...  # only needed if using spacy+llm
 
-# use an English language model to annotate the McMaster et al. transation of Maupassant:
-python scripts/annotate.py data/maupassant/en/txt data/maupassant/en/json -l en -f json
+# Maupassant French — both versions for different analyses
+python scripts/annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
+python scripts/annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu_claude -l fr -b spacy+claude
+
+# Maupassant English
+python scripts/annotate.py data/maupassant/en/txt data/maupassant/en/conllu -l en -b spacy
+
+# Poe-Baudelaire French
+python scripts/annotate.py data/poe/fr/histoires_extraordinaires/txt data/poe/fr/histoires_extraordinaires/conllu -l fr -b spacy
+python scripts/annotate.py data/poe/fr/histoires_extraordinaires/txt data/poe/fr/histoires_extraordinaires/conllu_claude -l fr -b spacy+claude
+
+# ELTeC reference corpora (spacy only, due to size)
+python scripts/annotate.py data/eltec/fr/txt data/eltec/fr/conllu -l fr -b spacy
+python scripts/annotate.py data/eltec/en/txt data/eltec/en/conllu -l en -b spacy
 ```
-
-**Output formats**:
-- `-f json`: CoreNLP-style JSON with denormalized dependency info
-- `-f conllu`: Standard CoNLL-U for compatibility with other NLP tools
-
-JSON output includes `basicDependencies` with governor/dependent lemmas inline:
-```json
-{
-  "dependent": 3,
-  "dependentGloss": "vieux",
-  "dependentLemma": "vieux",
-  "governor": 4,
-  "governorGloss": "bibelots",
-  "governorLemma": "bibelot",
-  "dep": "amod"
-}
-```
-
-**Note**: JSON output is large (~10× source text) and therefore is not included in the repository. Run annotation locally to generate.
-
-**Note**: Stanza's French model treats semicolons as sentence boundaries; the English model does not. Keep this in mind for sentence length comparisons.
-
 
 ## Index files
 Each author directory has an `index.tsv` for parallel text alignment:
