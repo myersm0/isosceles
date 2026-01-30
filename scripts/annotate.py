@@ -26,157 +26,10 @@ import re
 import sys
 from pathlib import Path
 
-
-# -----------------------------------------------------------------------------
-# LLM correction system prompt
-# -----------------------------------------------------------------------------
-
-llm_system_prompt = """
-You are an expert linguist reviewing Universal Dependencies (UD v2) annotations.
-
-You will receive a French sentence and its CoNLL-U parse.
-
-Your task is to identify annotation ERRORS and output only the necessary corrections as JSON.
-
-CRITICAL RULES:
-- Make the MINIMUM number of corrections needed.
-- Only modify tokens listed in the corrections output.
-- Use only valid UD v2 POS tags, dependency labels, and subtypes listed below.
-- Do not invent labels or subtypes.
-- If unsure, do NOT change the annotation.
-
-PRIORITY (resolve in this order):
-1. Tree validity (single ROOT, no cycles, all tokens connected)
-2. Wrong HEAD attachment
-3. Wrong DEPREL
-4. Wrong UPOS
-5. Wrong lemma
-
-You may output multiple corrections for the same token if needed.
-
-=== ERROR CATEGORIES TO CHECK ===
-
-STRUCTURE:
-- Wrong HEAD attachment (especially PP attachment, coordination scope, relative clause attachment)
-- Tree validity: exactly one ROOT, no cycles, all tokens reachable from ROOT
-
-DEPENDENCY LABELS:
-- appos vs flat:name
-- obj vs iobj
-- advmod vs obl
-- cop vs aux
-- mark vs case
-- nmod vs obl
-- acl vs advcl
-- dislocated for left/right dislocation
-- fixed / flat / compound for multiword expressions
-
-FRENCH-SPECIFIC:
-- Clitics and elision: j'→je, c'→ce, l'→le/la, m'→me, t'→te, s'→se, d'→de, n'→ne, qu'→que
-- Reflexive/pronominal verbs: use expl:pv or expl:comp
-- Causative constructions: faire + infinitive
-- Relative pronouns: qui (nsubj/obj), que (obj/mark), dont (nmod/obl), où (advmod/obl)
-- Auxiliary selection: être vs avoir in compound tenses
-- Clitic doubling vs true argument pronouns
-- Past participle: adjectival (ADJ) vs verbal (VERB) use
-
-POS TAGS:
-- ADJ vs VERB for participles
-- ADV vs ADP
-- AUX vs VERB
-- DET vs PRON
-
-LEMMA:
-- Irregular verb lemmas
-- Clitic normalization after elision
-
-=== VALID UD V2 UNIVERSAL POS TAGS ===
-
-ADJ (adjective), ADP (adposition), ADV (adverb), AUX (auxiliary), CCONJ (coordinating conjunction), DET (determiner), INTJ (interjection), NOUN (noun), NUM (numeral), PART (particle), PRON (pronoun), PROPN (proper noun), PUNCT (punctuation), SCONJ (subordinating conjunction), SYM (symbol), VERB (verb), X (other)
-
-=== VALID UD V2 DEPENDENCY RELATIONS ===
-
-Core arguments:
-- nsubj: nominal subject
-- obj: direct object
-- iobj: indirect object
-- csubj: clausal subject
-- ccomp: clausal complement
-- xcomp: open clausal complement
-
-Non-core dependents:
-- obl: oblique nominal (adjuncts, agents in passive)
-- vocative: vocative
-- expl: expletive
-- dislocated: dislocated elements
-- advcl: adverbial clause modifier
-- advmod: adverbial modifier
-- discourse: discourse element
-- aux: auxiliary
-- cop: copula
-- mark: marker (subordinating conjunction)
-- nmod: nominal modifier
-- appos: appositional modifier
-- nummod: numeric modifier
-- acl: adnominal clause
-- amod: adjectival modifier
-- det: determiner
-- clf: classifier
-- case: case marking (prepositions)
-
-Coordination:
-- conj: conjunct
-- cc: coordinating conjunction
-
-MWE and special:
-- fixed: fixed multiword expression
-- flat: flat multiword expression (names, etc.)
-- compound: compound
-
-Loose joining:
-- list: list
-- parataxis: parataxis
-- orphan: orphan in ellipsis
-- goeswith: goes with (orthographic errors)
-- reparandum: overridden disfluency
-
-Other:
-- punct: punctuation
-- root: root of sentence
-- dep: unspecified dependency
-
-=== FRENCH-SPECIFIC SUBTYPES ===
-
-- nsubj:pass, nsubj:caus (passive/causative subjects)
-- obj:agent, obj:lvc (agent, light verb construction)
-- iobj:agent (indirect object agent)
-- obl:agent, obl:arg, obl:mod (oblique subtypes)
-- expl:comp, expl:subj, expl:pass, expl:pv (expletive subtypes)
-- aux:pass, aux:caus, aux:tense (auxiliary subtypes)
-- acl:relcl (relative clause)
-- advcl:cleft (cleft construction)
-- flat:name, flat:foreign (flat subtypes)
-- compound:prt (particle verbs, rare in French)
-
-=== OUTPUT FORMAT ===
-
-Output a JSON object with a "corrections" array:
-
-{
-  "corrections": [
-    {"id": <token_id>, "field": "head", "value": <new_head_id>},
-    {"id": <token_id>, "field": "deprel", "value": "<new_deprel>"},
-    {"id": <token_id>, "field": "upos", "value": "<new_upos>"},
-    {"id": <token_id>, "field": "lemma", "value": "<new_lemma>"}
-  ]
-}
-
-If no errors are found:
-{"corrections": []}
-
-Output ONLY valid JSON. No commentary.
-"""
-
+def load_llm_prompt(path=None):
+	if path is None:
+		path = Path(__file__).parent / "prompt_fr.txt"
+	return Path(path).read_text(encoding="utf-8")
 
 # -----------------------------------------------------------------------------
 # Text chunking (for CoreNLP's 10k character limit)
@@ -493,7 +346,7 @@ def spacy_doc_to_tokens(doc):
 # spaCy + LLM backend (CoreNLP seg + spaCy parse + LLM corrections)
 # -----------------------------------------------------------------------------
 
-def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overwrite=False):
+def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overwrite=False, prompt_path=None):
 	import spacy
 	from spacy.language import Language
 	from stanza.server import CoreNLPClient
@@ -513,7 +366,10 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	if not files:
 		print("  No files to process", file=sys.stderr)
 		return
-	
+		
+	prompt = load_llm_prompt(prompt_path)
+	print(f"Loaded prompt: {len(prompt)} chars", file=sys.stderr)
+
 	print("Loading spaCy model...", file=sys.stderr)
 	spacy_model = "fr_dep_news_trf" if lang == "fr" else "en_core_web_trf"
 	nlp = spacy.load(spacy_model, disable=["ner"])
@@ -561,7 +417,7 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 					
 					try:
 						corrections, input_toks, output_toks = get_llm_corrections(
-							llm_client, sent_text, tokens, lang, model
+							llm_client, sent_text, tokens, lang, model, prompt
 						)
 						
 						total_input += input_toks
@@ -586,12 +442,12 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	print(f"Total corrections: {total_corrections}", file=sys.stderr)
 
 
-def get_llm_corrections(client, sent_text, tokens, lang, model):
+def get_llm_corrections(client, sent_text, tokens, lang, model, prompt):
 	"""Dispatch to appropriate provider based on model prefix."""
 	if model.startswith("claude-"):
-		return _anthropic_corrections(client, sent_text, tokens, lang, model)
+		return _anthropic_corrections(client, sent_text, tokens, lang, model, prompt)
 	else:
-		return _openai_corrections(client, sent_text, tokens, lang, model)
+		return _openai_corrections(client, sent_text, tokens, lang, model, prompt)
 
 
 def _format_parse_for_llm(tokens, lang):
@@ -616,7 +472,7 @@ def _parse_corrections_json(response_text):
 	return []
 
 
-def _anthropic_corrections(client, sent_text, tokens, lang, model):
+def _anthropic_corrections(client, sent_text, tokens, lang, model, prompt):
 	"""Get corrections using Anthropic API."""
 	lang_name, parse_str = _format_parse_for_llm(tokens, lang)
 	
@@ -626,7 +482,7 @@ def _anthropic_corrections(client, sent_text, tokens, lang, model):
 		system=[
 			{
 				"type": "text",
-				"text": llm_system_prompt,
+				"text": prompt,
 				"cache_control": {"type": "ephemeral"}
 			}
 		],
@@ -644,7 +500,7 @@ def _anthropic_corrections(client, sent_text, tokens, lang, model):
 	return corrections, response.usage.input_tokens, response.usage.output_tokens
 
 
-def _openai_corrections(client, sent_text, tokens, lang, model):
+def _openai_corrections(client, sent_text, tokens, lang, model, prompt):
 	"""Get corrections using OpenAI API."""
 	lang_name, parse_str = _format_parse_for_llm(tokens, lang)
 	
@@ -654,7 +510,7 @@ def _openai_corrections(client, sent_text, tokens, lang, model):
 		messages=[
 			{
 				"role": "system",
-				"content": llm_system_prompt
+				"content": prompt
 			},
 			{
 				"role": "user",
@@ -753,6 +609,11 @@ Examples:
 		action="store_true",
 		help="Overwrite existing output files (default: skip existing)"
 	)
+	ap.add_argument(
+		"--prompt", "-p",
+		default=None,
+		help="Path to LLM prompt file (default: ./scripts/prompt_fr.txt)"
+	)
 	args = ap.parse_args()
 	
 	if args.backend in ("corenlp", "spacy", "spacy+llm"):
@@ -787,13 +648,22 @@ Examples:
 	print("", file=sys.stderr)
 	
 	if args.backend == "stanza":
-		process_stanza(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
+		process_stanza(
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
+		)
 	elif args.backend == "corenlp":
-		process_corenlp(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
+		process_corenlp(
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
+		)
 	elif args.backend == "spacy":
-		process_spacy(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
+		process_spacy(
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
+		)
 	elif args.backend == "spacy+llm":
-		process_spacy_llm(args.input_dir, args.output_dir, args.lang, args.format, args.model, args.limit, args.overwrite)
+		process_spacy_llm(
+			args.input_dir, 
+			args.output_dir, args.lang, args.format, args.model, args.limit, args.overwrite, args.prompt
+		)
 	
 	print("\nDone.", file=sys.stderr)
 
