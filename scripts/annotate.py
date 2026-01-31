@@ -9,14 +9,9 @@ Backends:
   spacy+llm   - CoreNLP segmentation + spaCy parsing + LLM corrections
 
 Examples:
-  python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b stanza
   python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
-  python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy+llm
-  python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy+llm -m gpt-4o
-  python annotate.py data/poe/en/txt data/poe/en/conllu -l en -b spacy
-  
-  # Test on 5 random documents first
-  python annotate.py data/maupassant/fr/txt output/fr -l fr -b spacy+llm --limit 5
+  python annotate.py data/eltec/fr/txt data/gold -l fr -b spacy+llm \\
+      -m claude-opus-4-20250514 --chunks 1 --chunk-size 20 --seed 42
 """
 import argparse
 import json
@@ -26,16 +21,19 @@ import re
 import sys
 from pathlib import Path
 
+
+# -----------------------------------------------------------------------------
+# Utilities
+# -----------------------------------------------------------------------------
+
 def load_llm_prompt(path=None):
 	if path is None:
 		path = Path(__file__).parent / "prompt_fr.txt"
 	return Path(path).read_text(encoding="utf-8")
 
-# -----------------------------------------------------------------------------
-# Text chunking (for CoreNLP's 10k character limit)
-# -----------------------------------------------------------------------------
 
 def chunk_text(text, max_chars=9000):
+	"""Split text into chunks for CoreNLP's character limit."""
 	chunks = []
 	start = 0
 	n = len(text)
@@ -83,7 +81,7 @@ def select_files(input_dir, output_dir, fmt, limit=None, overwrite=False):
 			else:
 				files.append(f)
 		if skipped > 0:
-			print(f"  Skipping {skipped} files with existing output (use --overwrite to replace)", file=sys.stderr)
+			print(f"  Skipping {skipped} files with existing output", file=sys.stderr)
 	else:
 		files = list(all_files)
 	
@@ -95,51 +93,262 @@ def select_files(input_dir, output_dir, fmt, limit=None, overwrite=False):
 	return files
 
 
+def sample_chunks(sentences, n_chunks, chunk_size, seed=None):
+	"""Sample non-overlapping chunks of consecutive sentences."""
+	if seed is not None:
+		random.seed(seed)
+	
+	n_sentences = len(sentences)
+	if n_sentences < chunk_size:
+		return sentences
+	
+	max_chunks = n_sentences // chunk_size
+	n_chunks = min(n_chunks, max_chunks)
+	
+	if n_chunks == 0:
+		return sentences[:chunk_size] if sentences else []
+	
+	sampled = []
+	used_ranges = []
+	attempts = 0
+	
+	while len(sampled) < n_chunks and attempts < n_chunks * 20:
+		attempts += 1
+		start = random.randint(0, n_sentences - chunk_size)
+		end = start + chunk_size
+		
+		overlap = any(not (end <= us or start >= ue) for us, ue in used_ranges)
+		if not overlap:
+			sampled.append((start, end))
+			used_ranges.append((start, end))
+	
+	sampled.sort()
+	
+	result = []
+	for chunk_idx, (start, end) in enumerate(sampled):
+		for sent_id, sent_text, tokens in sentences[start:end]:
+			result.append((f"{sent_id}:chunk{chunk_idx+1}", sent_text, tokens))
+	
+	return result
+
+
 # -----------------------------------------------------------------------------
 # Output formatters
 # -----------------------------------------------------------------------------
 
 def tokens_to_conllu(tokens, sent_id, sent_text):
-	lines = [
-		f"# sent_id = {sent_id}",
-		f"# text = {sent_text}",
-	]
+	lines = [f"# sent_id = {sent_id}", f"# text = {sent_text}"]
 	for t in tokens:
 		row = [
-			str(t["id"]),
-			t["form"],
-			t["lemma"],
-			t["upos"],
-			t.get("xpos", "_"),
-			t.get("feats", "_"),
-			str(t["head"]),
-			t["deprel"],
-			t.get("deps", "_"),
-			t.get("misc", "_"),
+			str(t["id"]), t["form"], t["lemma"], t["upos"], t.get("xpos", "_"),
+			t.get("feats", "_"), str(t["head"]), t["deprel"],
+			t.get("deps", "_"), t.get("misc", "_"),
 		]
 		lines.append("\t".join(row))
 	lines.append("")
 	return "\n".join(lines)
 
 
-def tokens_to_json_sentence(tokens, sent_text):
-	deps = []
-	for t in tokens:
-		gov_tok = next((x for x in tokens if x["id"] == t["head"]), None)
-		deps.append({
-			"dependent": t["id"],
-			"dependentGloss": t["form"],
-			"dependentLemma": t["lemma"],
-			"governor": t["head"],
-			"governorGloss": gov_tok["form"] if gov_tok else "ROOT",
-			"governorLemma": gov_tok["lemma"] if gov_tok else "ROOT",
-			"dep": t["deprel"],
+def write_output(out_path, doc_id, sentences, fmt):
+	if fmt == "json":
+		data = {
+			"doc_id": doc_id,
+			"sentences": [
+				{"sent_id": sid, "text": txt, "tokens": toks}
+				for sid, txt, toks in sentences
+			]
+		}
+		out_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+	else:
+		lines = [tokens_to_conllu(toks, sid, txt) for sid, txt, toks in sentences]
+		out_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+# -----------------------------------------------------------------------------
+# Core parsing helpers
+# -----------------------------------------------------------------------------
+
+def load_spacy_model(lang, component_name="single_sentence"):
+	"""Load spaCy transformer model with single-sentence processing."""
+	import spacy
+	from spacy.language import Language
+	
+	@Language.component(component_name)
+	def force_single_sentence(doc):
+		for token in doc:
+			token.is_sent_start = False
+		doc[0].is_sent_start = True
+		return doc
+	
+	model_name = "fr_dep_news_trf" if lang == "fr" else "en_core_web_trf"
+	nlp = spacy.load(model_name, disable=["ner"])
+	nlp.add_pipe(component_name, before="parser")
+	return nlp
+
+
+def spacy_doc_to_tokens(doc):
+	"""Convert spaCy Doc to list of token dicts."""
+	non_space = [(i, tok) for i, tok in enumerate(doc) if tok.pos_ != "SPACE"]
+	old_to_new = {old_i: new_i for new_i, (old_i, _) in enumerate(non_space, start=1)}
+	
+	tokens = []
+	for new_i, (old_i, tok) in enumerate(non_space, start=1):
+		head = 0 if tok.head == tok else old_to_new.get(tok.head.i, 0)
+		tokens.append({
+			"id": new_i,
+			"form": tok.text,
+			"lemma": tok.lemma_ or "_",
+			"upos": tok.pos_ or "_",
+			"xpos": tok.tag_ or "_",
+			"feats": str(tok.morph) or "_",
+			"head": head,
+			"deprel": tok.dep_ or "_",
+			"deps": "_",
+			"misc": "_",
 		})
-	return {
-		"text": sent_text,
-		"tokens": tokens,
-		"basicDependencies": deps,
-	}
+	return tokens
+
+
+def segment_and_parse(text, doc_id, corenlp_client, spacy_nlp, lang):
+	"""
+	Segment text with CoreNLP and parse with spaCy.
+	
+	Returns: list of (sent_id, sent_text, tokens)
+	"""
+	sentences = []
+	sent_idx = 0
+	
+	for text_chunk in chunk_text(text):
+		doc = corenlp_client.annotate(text_chunk, properties={"pipelineLanguage": lang})
+		
+		for sent in doc.sentence:
+			sent_idx += 1
+			sent_text = "".join(t.word + t.after for t in sent.token).strip()
+			sent_text = " ".join(sent_text.split())
+			
+			if not sent_text:
+				continue
+			
+			spacy_doc = spacy_nlp(sent_text)
+			tokens = spacy_doc_to_tokens(spacy_doc)
+			sentences.append((f"{doc_id}-{sent_idx}", sent_text, tokens))
+	
+	return sentences
+
+
+# -----------------------------------------------------------------------------
+# LLM correction helpers
+# -----------------------------------------------------------------------------
+
+def get_llm_client(model):
+	"""Initialize appropriate LLM client based on model name."""
+	if model.startswith("claude-"):
+		import anthropic
+		return anthropic.Anthropic()
+	else:
+		import openai
+		return openai.OpenAI()
+
+
+def get_llm_corrections(client, sent_text, tokens, lang, model, prompt):
+	"""Get corrections from LLM."""
+	if model.startswith("claude-"):
+		return _anthropic_corrections(client, sent_text, tokens, lang, model, prompt)
+	else:
+		return _openai_corrections(client, sent_text, tokens, lang, model, prompt)
+
+
+def _format_parse_for_llm(tokens, lang):
+	lang_name = "French" if lang == "fr" else "English"
+	lines = [f"{t['id']}\t{t['form']}\t{t['lemma']}\t{t['upos']}\t{t['head']}\t{t['deprel']}"
+	         for t in tokens]
+	return lang_name, "\n".join(lines)
+
+
+def _parse_corrections_json(response_text):
+	match = re.search(r"\{[\s\S]*\}", response_text)
+	if match:
+		try:
+			return json.loads(match.group()).get("corrections", [])
+		except json.JSONDecodeError:
+			pass
+	return []
+
+
+def _anthropic_corrections(client, sent_text, tokens, lang, model, prompt):
+	lang_name, parse_str = _format_parse_for_llm(tokens, lang)
+	
+	response = client.messages.create(
+		model=model,
+		max_tokens=1024,
+		system=[{"type": "text", "text": prompt, "cache_control": {"type": "ephemeral"}}],
+		messages=[{"role": "user", "content": f"{lang_name} sentence:\n{sent_text}\n\nParse:\n{parse_str}"}]
+	)
+	
+	corrections = _parse_corrections_json(response.content[0].text)
+	return corrections, response.usage.input_tokens, response.usage.output_tokens
+
+
+def _openai_corrections(client, sent_text, tokens, lang, model, prompt):
+	lang_name, parse_str = _format_parse_for_llm(tokens, lang)
+	
+	response = client.chat.completions.create(
+		model=model,
+		max_completion_tokens=1024,
+		messages=[
+			{"role": "system", "content": prompt},
+			{"role": "user", "content": f"{lang_name} sentence:\n{sent_text}\n\nParse:\n{parse_str}"}
+		]
+	)
+	
+	corrections = _parse_corrections_json(response.choices[0].message.content)
+	usage = response.usage
+	return corrections, usage.prompt_tokens, usage.completion_tokens
+
+
+def apply_corrections(tokens, corrections):
+	"""Apply corrections to token list (mutates and returns tokens)."""
+	token_map = {t["id"]: t for t in tokens}
+	
+	for c in corrections:
+		tok_id = c.get("id")
+		field = c.get("field")
+		value = c.get("value")
+		
+		if tok_id in token_map and field in ("head", "deprel", "upos", "lemma", "xpos", "feats"):
+			token_map[tok_id][field] = value
+	
+	return tokens
+
+
+def apply_llm_corrections(sentences, llm_client, model, prompt, lang):
+	"""
+	Apply LLM corrections to all sentences.
+	
+	Returns: (corrected_sentences, stats_dict)
+	"""
+	corrected = []
+	stats = {"input_tokens": 0, "output_tokens": 0, "corrections": 0, "errors": 0}
+	
+	for sent_id, sent_text, tokens in sentences:
+		try:
+			corrections, in_toks, out_toks = get_llm_corrections(
+				llm_client, sent_text, tokens, lang, model, prompt
+			)
+			stats["input_tokens"] += in_toks
+			stats["output_tokens"] += out_toks
+			
+			if corrections:
+				stats["corrections"] += len(corrections)
+				tokens = apply_corrections(tokens, corrections)
+		
+		except Exception as e:
+			print(f"    [{sent_id}] ERROR: {e}", file=sys.stderr)
+			stats["errors"] += 1
+		
+		corrected.append((sent_id, sent_text, tokens))
+	
+	return corrected, stats
 
 
 # -----------------------------------------------------------------------------
@@ -158,10 +367,8 @@ def process_stanza(input_dir, output_dir, lang, fmt, limit=None, overwrite=False
 		print("  No files to process", file=sys.stderr)
 		return
 	
-	print("Downloading Stanza models...", file=sys.stderr)
-	stanza.download(lang, processors="tokenize,pos,lemma,depparse", verbose=False)
-	nlp = stanza.Pipeline(lang, processors="tokenize,pos,lemma,depparse", verbose=False)
-	
+	print("Loading Stanza model...", file=sys.stderr)
+	nlp = stanza.Pipeline(lang=lang, processors="tokenize,pos,lemma,depparse")
 	ext = ".json" if fmt == "json" else ".conllu"
 	
 	for filepath in files:
@@ -170,22 +377,22 @@ def process_stanza(input_dir, output_dir, lang, fmt, limit=None, overwrite=False
 		doc = nlp(text)
 		
 		sentences = []
-		for sent_idx, sent in enumerate(doc.sentences):
+		for i, sent in enumerate(doc.sentences, 1):
 			tokens = []
-			for word in sent.words:
+			for tok in sent.words:
 				tokens.append({
-					"id": word.id,
-					"form": word.text,
-					"lemma": word.lemma or "_",
-					"upos": word.upos or "_",
-					"xpos": word.xpos or "_",
-					"feats": "_",
-					"head": word.head,
-					"deprel": word.deprel or "_",
+					"id": tok.id,
+					"form": tok.text,
+					"lemma": tok.lemma or "_",
+					"upos": tok.upos or "_",
+					"xpos": tok.xpos or "_",
+					"feats": tok.feats or "_",
+					"head": tok.head,
+					"deprel": tok.deprel or "_",
 					"deps": "_",
 					"misc": "_",
 				})
-			sentences.append((f"{filepath.stem}-{sent_idx + 1}", sent.text, tokens))
+			sentences.append((f"{filepath.stem}-{i}", sent.text, tokens))
 		
 		out_path = output_dir / (filepath.stem + ext)
 		write_output(out_path, filepath.stem, sentences, fmt)
@@ -208,10 +415,11 @@ def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=Fals
 		return
 	
 	ext = ".json" if fmt == "json" else ".conllu"
+	props = {"pipelineLanguage": lang}
 	
 	with CoreNLPClient(
 		annotators=["tokenize", "ssplit", "pos", "lemma", "depparse"],
-		properties={"pipelineLanguage": lang},
+		properties=props,
 		be_quiet=True
 	) as client:
 		for filepath in files:
@@ -221,30 +429,28 @@ def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=Fals
 			sentences = []
 			sent_idx = 0
 			
-			for chunk in chunk_text(text):
-				doc = client.annotate(chunk, properties={"pipelineLanguage": lang})
+			for text_chunk in chunk_text(text):
+				doc = client.annotate(text_chunk, properties=props)
 				
 				for sent in doc.sentence:
 					sent_idx += 1
-					sent_text = "".join(t.word + t.after for t in sent.token).strip()
-					sent_text = " ".join(sent_text.split())  # normalize whitespace
-					
-					deps = {d.target: (d.source, d.dep) for d in sent.basicDependencies.edge}
 					tokens = []
 					for tok in sent.token:
-						head, deprel = deps.get(tok.tokenEndIndex, (0, "root"))
+						dep = next((e for e in sent.basicDependencies.edge if e.target == tok.tokenEndIndex), None)
 						tokens.append({
 							"id": tok.tokenEndIndex,
 							"form": tok.word,
 							"lemma": tok.lemma or "_",
 							"upos": tok.pos or "_",
-							"xpos": tok.pos or "_",
+							"xpos": "_",
 							"feats": "_",
-							"head": head,
-							"deprel": deprel,
+							"head": dep.source if dep else 0,
+							"deprel": dep.dep if dep else "root",
 							"deps": "_",
 							"misc": "_",
 						})
+					
+					sent_text = "".join(t.word + t.after for t in sent.token).strip()
 					sentences.append((f"{filepath.stem}-{sent_idx}", sent_text, tokens))
 			
 			out_path = output_dir / (filepath.stem + ext)
@@ -256,16 +462,7 @@ def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=Fals
 # -----------------------------------------------------------------------------
 
 def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False):
-	import spacy
-	from spacy.language import Language
 	from stanza.server import CoreNLPClient
-	
-	@Language.component("single_sentence")
-	def single_sentence(doc):
-		for token in doc:
-			token.is_sent_start = False
-		doc[0].is_sent_start = True
-		return doc
 	
 	input_dir = Path(input_dir)
 	output_dir = Path(output_dir)
@@ -277,10 +474,7 @@ def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False)
 		return
 	
 	print("Loading spaCy model...", file=sys.stderr)
-	model_name = "fr_dep_news_trf" if lang == "fr" else "en_core_web_trf"
-	nlp = spacy.load(model_name, disable=["ner"])
-	nlp.add_pipe("single_sentence", before="parser")
-	
+	nlp = load_spacy_model(lang, "single_sentence_spacy")
 	ext = ".json" if fmt == "json" else ".conllu"
 	
 	with CoreNLPClient(
@@ -291,72 +485,19 @@ def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False)
 		for filepath in files:
 			print(f"  {filepath.name}", file=sys.stderr)
 			text = filepath.read_text(encoding="utf-8")
-			
-			sentences = []
-			sent_idx = 0
-			
-			for chunk in chunk_text(text):
-				doc = client.annotate(chunk, properties={"pipelineLanguage": lang})
-				
-				for sent in doc.sentence:
-					sent_idx += 1
-					sent_text = "".join(t.word + t.after for t in sent.token).strip()
-					sent_text = " ".join(sent_text.split())  # normalize whitespace
-					
-					if not sent_text:
-						continue
-					
-					spacy_doc = nlp(sent_text)
-					tokens = spacy_doc_to_tokens(spacy_doc)
-					sentences.append((f"{filepath.stem}-{sent_idx}", sent_text, tokens))
+			sentences = segment_and_parse(text, filepath.stem, client, nlp, lang)
 			
 			out_path = output_dir / (filepath.stem + ext)
 			write_output(out_path, filepath.stem, sentences, fmt)
 
 
-def spacy_doc_to_tokens(doc):
-	tokens = []
-	non_space = [(i, tok) for i, tok in enumerate(doc) if tok.pos_ != "SPACE"]
-	old_to_new = {old_i: new_i for new_i, (old_i, _) in enumerate(non_space, start=1)}
-	
-	for new_i, (old_i, tok) in enumerate(non_space, start=1):
-		if tok.head == tok:
-			head = 0
-		else:
-			head_old = tok.head.i
-			head = old_to_new.get(head_old, 0)
-		
-		tokens.append({
-			"id": new_i,
-			"form": tok.text,
-			"lemma": tok.lemma_ or "_",
-			"upos": tok.pos_ or "_",
-			"xpos": tok.tag_ or "_",
-			"feats": str(tok.morph) or "_",
-			"head": head,
-			"deprel": tok.dep_ or "_",
-			"deps": "_",
-			"misc": "_",
-		})
-	
-	return tokens
-
-
 # -----------------------------------------------------------------------------
-# spaCy + LLM backend (CoreNLP seg + spaCy parse + LLM corrections)
+# spaCy + LLM backend
 # -----------------------------------------------------------------------------
 
-def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overwrite=False, prompt_path=None):
-	import spacy
-	from spacy.language import Language
+def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overwrite=False,
+                      prompt_path=None, chunks=None, chunk_size=20, seed=None):
 	from stanza.server import CoreNLPClient
-	
-	@Language.component("single_sentence_llm")
-	def single_sentence_llm(doc):
-		for token in doc:
-			token.is_sent_start = False
-		doc[0].is_sent_start = True
-		return doc
 	
 	input_dir = Path(input_dir)
 	output_dir = Path(output_dir)
@@ -366,28 +507,27 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	if not files:
 		print("  No files to process", file=sys.stderr)
 		return
-		
+	
+	# Setup
+	if seed is not None:
+		random.seed(seed)
+		file_seeds = {f.stem: random.randint(0, 2**31) for f in files}
+	else:
+		file_seeds = {}
+	
 	prompt = load_llm_prompt(prompt_path)
 	print(f"Loaded prompt: {len(prompt)} chars", file=sys.stderr)
-
+	
+	if chunks:
+		print(f"Chunk sampling: {chunks} × {chunk_size} sentences per file", file=sys.stderr)
+	
 	print("Loading spaCy model...", file=sys.stderr)
-	spacy_model = "fr_dep_news_trf" if lang == "fr" else "en_core_web_trf"
-	nlp = spacy.load(spacy_model, disable=["ner"])
-	nlp.add_pipe("single_sentence_llm", before="parser")
-	
-	# Initialize LLM client based on model prefix
-	if model.startswith("claude-"):
-		import anthropic
-		llm_client = anthropic.Anthropic()
-	else:
-		import openai
-		llm_client = openai.OpenAI()
-	
+	nlp = load_spacy_model(lang, "single_sentence_llm")
+	llm_client = get_llm_client(model)
 	ext = ".json" if fmt == "json" else ".conllu"
 	
-	total_input = 0
-	total_output = 0
-	total_corrections = 0
+	# Accumulators
+	total_stats = {"input_tokens": 0, "output_tokens": 0, "corrections": 0, "sentences": 0}
 	
 	with CoreNLPClient(
 		annotators=["tokenize", "ssplit"],
@@ -398,163 +538,39 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 			print(f"  {filepath.name}", file=sys.stderr)
 			text = filepath.read_text(encoding="utf-8")
 			
-			sentences = []
-			sent_idx = 0
+			# Segment and parse
+			sentences = segment_and_parse(text, filepath.stem, client, nlp, lang)
 			
-			for chunk in chunk_text(text):
-				doc = client.annotate(chunk, properties={"pipelineLanguage": lang})
-				
-				for sent in doc.sentence:
-					sent_idx += 1
-					sent_text = "".join(t.word + t.after for t in sent.token).strip()
-					sent_text = " ".join(sent_text.split())
-					
-					if not sent_text:
-						continue
-					
-					spacy_doc = nlp(sent_text)
-					tokens = spacy_doc_to_tokens(spacy_doc)
-					
-					try:
-						corrections, input_toks, output_toks = get_llm_corrections(
-							llm_client, sent_text, tokens, lang, model, prompt
-						)
-						
-						total_input += input_toks
-						total_output += output_toks
-						
-						if corrections:
-							total_corrections += len(corrections)
-							tokens = apply_corrections(tokens, corrections)
-							print(f"    [{sent_idx}] {len(corrections)} corrections", file=sys.stderr)
-						
-					except Exception as e:
-						print(f"    [{sent_idx}] ERROR: {e}", file=sys.stderr)
-					
-					sentences.append((f"{filepath.stem}-{sent_idx}", sent_text, tokens))
+			# Sample if requested
+			if chunks and chunks > 0:
+				file_seed = file_seeds.get(filepath.stem)
+				sentences = sample_chunks(sentences, chunks, chunk_size, seed=file_seed)
+				print(f"    Sampled {len(sentences)} sentences", file=sys.stderr)
 			
+			# Apply LLM corrections
+			sentences, stats = apply_llm_corrections(sentences, llm_client, model, prompt, lang)
+			
+			# Accumulate stats
+			total_stats["input_tokens"] += stats["input_tokens"]
+			total_stats["output_tokens"] += stats["output_tokens"]
+			total_stats["corrections"] += stats["corrections"]
+			total_stats["sentences"] += len(sentences)
+			
+			# Write output
 			out_path = output_dir / (filepath.stem + ext)
 			write_output(out_path, filepath.stem, sentences, fmt)
 	
-	print(f"\n=== Token Usage ===", file=sys.stderr)
-	print(f"Input tokens:  {total_input:,}", file=sys.stderr)
-	print(f"Output tokens: {total_output:,}", file=sys.stderr)
-	print(f"Total corrections: {total_corrections}", file=sys.stderr)
-
-
-def get_llm_corrections(client, sent_text, tokens, lang, model, prompt):
-	"""Dispatch to appropriate provider based on model prefix."""
+	# Summary
+	print(f"\n=== Summary ===", file=sys.stderr)
+	print(f"Files: {len(files)}", file=sys.stderr)
+	print(f"Sentences: {total_stats['sentences']}", file=sys.stderr)
+	print(f"Corrections: {total_stats['corrections']}", file=sys.stderr)
+	print(f"Tokens: {total_stats['input_tokens']:,} in / {total_stats['output_tokens']:,} out", file=sys.stderr)
+	
 	if model.startswith("claude-"):
-		return _anthropic_corrections(client, sent_text, tokens, lang, model, prompt)
-	else:
-		return _openai_corrections(client, sent_text, tokens, lang, model, prompt)
-
-
-def _format_parse_for_llm(tokens, lang):
-	"""Format tokens as simplified parse string for LLM input."""
-	lang_name = "French" if lang == "fr" else "English"
-	parse_lines = []
-	for t in tokens:
-		parse_lines.append(f"{t['id']}\t{t['form']}\t{t['lemma']}\t{t['upos']}\t{t['head']}\t{t['deprel']}")
-	parse_str = "\n".join(parse_lines)
-	return lang_name, parse_str
-
-
-def _parse_corrections_json(response_text):
-	"""Extract corrections from LLM response text."""
-	match = re.search(r"\{[\s\S]*\}", response_text)
-	if match:
-		try:
-			data = json.loads(match.group())
-			return data.get("corrections", [])
-		except json.JSONDecodeError:
-			return []
-	return []
-
-
-def _anthropic_corrections(client, sent_text, tokens, lang, model, prompt):
-	"""Get corrections using Anthropic API."""
-	lang_name, parse_str = _format_parse_for_llm(tokens, lang)
-	
-	response = client.messages.create(
-		model=model,
-		max_tokens=1024,
-		system=[
-			{
-				"type": "text",
-				"text": prompt,
-				"cache_control": {"type": "ephemeral"}
-			}
-		],
-		messages=[
-			{
-				"role": "user",
-				"content": f"{lang_name} sentence:\n{sent_text}\n\nParse:\n{parse_str}"
-			}
-		]
-	)
-	
-	response_text = response.content[0].text
-	corrections = _parse_corrections_json(response_text)
-	
-	return corrections, response.usage.input_tokens, response.usage.output_tokens
-
-
-def _openai_corrections(client, sent_text, tokens, lang, model, prompt):
-	"""Get corrections using OpenAI API."""
-	lang_name, parse_str = _format_parse_for_llm(tokens, lang)
-	
-	response = client.chat.completions.create(
-		model=model,
-		max_tokens=1024,
-		messages=[
-			{
-				"role": "system",
-				"content": prompt
-			},
-			{
-				"role": "user",
-				"content": f"{lang_name} sentence:\n{sent_text}\n\nParse:\n{parse_str}"
-			}
-		]
-	)
-	
-	response_text = response.choices[0].message.content
-	corrections = _parse_corrections_json(response_text)
-	
-	return corrections, response.usage.prompt_tokens, response.usage.completion_tokens
-
-
-def apply_corrections(tokens, corrections):
-	token_map = {t["id"]: t for t in tokens}
-	
-	for c in corrections:
-		tok_id = c.get("id")
-		field = c.get("field")
-		value = c.get("value")
-		
-		if tok_id in token_map and field in ("head", "deprel", "upos", "lemma"):
-			token_map[tok_id][field] = value
-	
-	return tokens
-
-
-# -----------------------------------------------------------------------------
-# Output writer
-# -----------------------------------------------------------------------------
-
-def write_output(out_path, doc_id, sentences, fmt):
-	if fmt == "json":
-		result = {
-			"doc_id": doc_id,
-			"sentences": [tokens_to_json_sentence(tokens, text) for _, text, tokens in sentences]
-		}
-		out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-	else:
-		lines = []
-		for sent_id, sent_text, tokens in sentences:
-			lines.append(tokens_to_conllu(tokens, sent_id, sent_text))
-		out_path.write_text("\n".join(lines), encoding="utf-8")
+		rate = (15, 75) if "opus" in model else (3, 15)
+		cost = (total_stats["input_tokens"] * rate[0] + total_stats["output_tokens"] * rate[1]) / 1_000_000
+		print(f"Est. cost: ${cost:.2f}", file=sys.stderr)
 
 
 # -----------------------------------------------------------------------------
@@ -573,96 +589,65 @@ Backends:
   spacy+llm   CoreNLP segmentation + spaCy parsing + LLM corrections
 
 Examples:
-  %(prog)s data/maupassant/fr/txt output/fr -l fr -b stanza
+  # Full document annotation
   %(prog)s data/maupassant/fr/txt output/fr -l fr -b spacy
-  %(prog)s data/maupassant/fr/txt output/fr -l fr -b spacy+llm
-  %(prog)s data/maupassant/fr/txt output/fr -l fr -b spacy+llm -m gpt-4o
-  %(prog)s data/poe/en/txt output/en -l en -b spacy
+  %(prog)s data/maupassant/fr/txt output/fr -l fr -b spacy+llm -m claude-sonnet-4-20250514
   
-  # Test on 5 random documents first
-  %(prog)s data/maupassant/fr/txt output/fr -l fr -b spacy+llm --limit 5
+  # Chunk sampling for training data (equal per novel)
+  %(prog)s data/eltec/fr/txt data/gold -l fr -b spacy+llm \\
+      -m claude-opus-4-20250514 --chunks 1 --chunk-size 20 --seed 42
+  
+  %(prog)s data/eltec/fr/txt data/silver -l fr -b spacy+llm \\
+      -m claude-sonnet-4-20250514 --chunks 10 --chunk-size 20 --seed 43
 """
 	)
 	ap.add_argument("input_dir", help="Directory containing .txt files")
 	ap.add_argument("output_dir", help="Output directory for annotations")
-	ap.add_argument("--lang", "-l", choices=["fr", "en"], required=True, help="Language")
-	ap.add_argument("--format", "-f", choices=["json", "conllu"], default="conllu", help="Output format")
-	ap.add_argument(
-		"--backend", "-b",
-		choices=["stanza", "corenlp", "spacy", "spacy+llm"],
-		default="spacy",
-		help="Annotation backend"
-	)
-	ap.add_argument(
-		"--model", "-m",
-		default=None,
-		help="LLM model for corrections (only with spacy+llm). Supports claude-* and gpt-*/o1-*/o3-*"
-	)
-	ap.add_argument(
-		"--limit", "-n",
-		type=int,
-		default=None,
-		help="Process only N documents (random selection for sampling)"
-	)
-	ap.add_argument(
-		"--overwrite",
-		action="store_true",
-		help="Overwrite existing output files (default: skip existing)"
-	)
-	ap.add_argument(
-		"--prompt", "-p",
-		default=None,
-		help="Path to LLM prompt file (default: ./scripts/prompt_fr.txt)"
-	)
+	ap.add_argument("--lang", "-l", choices=["fr", "en"], required=True)
+	ap.add_argument("--format", "-f", choices=["json", "conllu"], default="conllu")
+	ap.add_argument("--backend", "-b", choices=["stanza", "corenlp", "spacy", "spacy+llm"], default="spacy")
+	ap.add_argument("--model", "-m", default=None, help="LLM model (claude-* or gpt-*)")
+	ap.add_argument("--limit", "-n", type=int, help="Process only N documents")
+	ap.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
+	ap.add_argument("--prompt", "-p", help="Path to LLM prompt file")
+	ap.add_argument("--chunks", "-c", type=int, help="Sample N chunks per document")
+	ap.add_argument("--chunk-size", type=int, default=20, help="Sentences per chunk (default: 20)")
+	ap.add_argument("--seed", "-s", type=int, help="Random seed for reproducibility")
 	args = ap.parse_args()
 	
+	# Validation
 	if args.backend in ("corenlp", "spacy", "spacy+llm"):
 		if not os.environ.get("CORENLP_HOME"):
-			print("Error: CORENLP_HOME environment variable not set", file=sys.stderr)
-			print("CoreNLP is required for sentence segmentation.", file=sys.stderr)
-			sys.exit(1)
+			sys.exit("Error: CORENLP_HOME not set")
 	
 	if args.backend == "spacy+llm":
-		if args.model.startswith("claude-"):
-			if not os.environ.get("ANTHROPIC_API_KEY"):
-				print("Error: ANTHROPIC_API_KEY environment variable not set", file=sys.stderr)
-				sys.exit(1)
-		elif args.model.startswith(("gpt-", "o1", "o3")):
-			if not os.environ.get("OPENAI_API_KEY"):
-				print("Error: OPENAI_API_KEY environment variable not set", file=sys.stderr)
-				sys.exit(1)
-		else:
-			print(f"Error: Unknown model provider for '{args.model}'", file=sys.stderr)
-			print("Model must start with 'claude-', 'gpt-', 'o1', or 'o3'", file=sys.stderr)
-			sys.exit(1)
+		if not args.model:
+			sys.exit("Error: --model required for spacy+llm backend")
+		if args.model.startswith("claude-") and not os.environ.get("ANTHROPIC_API_KEY"):
+			sys.exit("Error: ANTHROPIC_API_KEY not set")
+		if args.model.startswith(("gpt-", "o1", "o3")) and not os.environ.get("OPENAI_API_KEY"):
+			sys.exit("Error: OPENAI_API_KEY not set")
 	
+	# Status
 	print(f"Backend: {args.backend}", file=sys.stderr)
 	print(f"Language: {args.lang}", file=sys.stderr)
-	print(f"Format: {args.format}", file=sys.stderr)
 	print(f"Input: {args.input_dir}", file=sys.stderr)
 	print(f"Output: {args.output_dir}", file=sys.stderr)
-	if args.limit:
-		print(f"Limit: {args.limit} documents (random)", file=sys.stderr)
-	if not args.overwrite:
-		print(f"Overwrite: off (use --overwrite to replace existing)", file=sys.stderr)
+	if args.chunks:
+		print(f"Sampling: {args.chunks} × {args.chunk_size} sentences, seed={args.seed}", file=sys.stderr)
 	print("", file=sys.stderr)
 	
+	# Dispatch
 	if args.backend == "stanza":
-		process_stanza(
-			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
-		)
+		process_stanza(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
 	elif args.backend == "corenlp":
-		process_corenlp(
-			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
-		)
+		process_corenlp(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
 	elif args.backend == "spacy":
-		process_spacy(
-			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
-		)
+		process_spacy(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
 	elif args.backend == "spacy+llm":
 		process_spacy_llm(
-			args.input_dir, 
-			args.output_dir, args.lang, args.format, args.model, args.limit, args.overwrite, args.prompt
+			args.input_dir, args.output_dir, args.lang, args.format, args.model,
+			args.limit, args.overwrite, args.prompt, args.chunks, args.chunk_size, args.seed
 		)
 	
 	print("\nDone.", file=sys.stderr)
