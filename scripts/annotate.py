@@ -63,6 +63,18 @@ def chunk_text(text, max_chars=9000):
 	return chunks
 
 
+def build_corenlp_props(lang, ssplit="two", threads=None):
+	"""Build CoreNLP properties dict."""
+	props = {
+		"pipelineLanguage": lang,
+		"ssplit.newlineIsSentenceBreak": ssplit,
+	    "tokenize.whitespace": "false",  # might help?
+	}
+	if threads:
+		props["threads"] = str(threads)
+	return props
+
+
 def select_files(input_dir, output_dir, fmt, limit=None, overwrite=False):
 	"""Select input files, optionally limiting and checking for existing outputs."""
 	input_dir = Path(input_dir)
@@ -209,7 +221,7 @@ def spacy_doc_to_tokens(doc):
 	return tokens
 
 
-def segment_and_parse(text, doc_id, corenlp_client, spacy_nlp, lang):
+def segment_and_parse(text, doc_id, corenlp_client, spacy_nlp, props):
 	"""
 	Segment text with CoreNLP and parse with spaCy.
 	
@@ -219,7 +231,7 @@ def segment_and_parse(text, doc_id, corenlp_client, spacy_nlp, lang):
 	sent_idx = 0
 	
 	for text_chunk in chunk_text(text):
-		doc = corenlp_client.annotate(text_chunk, properties={"pipelineLanguage": lang})
+		doc = corenlp_client.annotate(text_chunk, properties=props)
 		
 		for sent in doc.sentence:
 			sent_idx += 1
@@ -461,7 +473,7 @@ def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=Fals
 # spaCy backend (CoreNLP segmentation + spaCy parsing)
 # -----------------------------------------------------------------------------
 
-def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False):
+def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False, ssplit="two", threads=None):
 	from stanza.server import CoreNLPClient
 	
 	input_dir = Path(input_dir)
@@ -473,19 +485,23 @@ def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False)
 		print("  No files to process", file=sys.stderr)
 		return
 	
+	props = build_corenlp_props(lang, ssplit)
+	print(f"CoreNLP props: {props}", file=sys.stderr)
+	
 	print("Loading spaCy model...", file=sys.stderr)
 	nlp = load_spacy_model(lang, "single_sentence_spacy")
 	ext = ".json" if fmt == "json" else ".conllu"
 	
 	with CoreNLPClient(
 		annotators=["tokenize", "ssplit"],
-		properties={"pipelineLanguage": lang},
+		properties=props,
+		threads=threads or 5,
 		be_quiet=True
 	) as client:
 		for filepath in files:
 			print(f"  {filepath.name}", file=sys.stderr)
 			text = filepath.read_text(encoding="utf-8")
-			sentences = segment_and_parse(text, filepath.stem, client, nlp, lang)
+			sentences = segment_and_parse(text, filepath.stem, client, nlp, props)
 			
 			out_path = output_dir / (filepath.stem + ext)
 			write_output(out_path, filepath.stem, sentences, fmt)
@@ -496,7 +512,7 @@ def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False)
 # -----------------------------------------------------------------------------
 
 def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overwrite=False,
-                      prompt_path=None, chunks=None, chunk_size=20, seed=None):
+                      prompt_path=None, chunks=None, chunk_size=20, seed=None, ssplit="two", threads=None):
 	from stanza.server import CoreNLPClient
 	
 	input_dir = Path(input_dir)
@@ -521,6 +537,9 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	if chunks:
 		print(f"Chunk sampling: {chunks} × {chunk_size} sentences per file", file=sys.stderr)
 	
+	props = build_corenlp_props(lang, ssplit)
+	print(f"CoreNLP props: {props}", file=sys.stderr)
+	
 	print("Loading spaCy model...", file=sys.stderr)
 	nlp = load_spacy_model(lang, "single_sentence_llm")
 	llm_client = get_llm_client(model)
@@ -531,7 +550,8 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	
 	with CoreNLPClient(
 		annotators=["tokenize", "ssplit"],
-		properties={"pipelineLanguage": lang},
+		properties=props,
+		threads=threads or 5,
 		be_quiet=True
 	) as client:
 		for filepath in files:
@@ -539,7 +559,7 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 			text = filepath.read_text(encoding="utf-8")
 			
 			# Segment and parse
-			sentences = segment_and_parse(text, filepath.stem, client, nlp, lang)
+			sentences = segment_and_parse(text, filepath.stem, client, nlp, props)
 			
 			# Sample if requested
 			if chunks and chunks > 0:
@@ -613,6 +633,9 @@ Examples:
 	ap.add_argument("--chunks", "-c", type=int, help="Sample N chunks per document")
 	ap.add_argument("--chunk-size", type=int, default=20, help="Sentences per chunk (default: 20)")
 	ap.add_argument("--seed", "-s", type=int, help="Random seed for reproducibility")
+	ap.add_argument("--ssplit", choices=["always", "never", "two"], default="two",
+	                help="Newline sentence break mode (default: two)")
+	ap.add_argument("--threads", "-t", type=int, default=5, help="CoreNLP threads (default: 5)")
 	args = ap.parse_args()
 	
 	# Validation
@@ -633,6 +656,8 @@ Examples:
 	print(f"Language: {args.lang}", file=sys.stderr)
 	print(f"Input: {args.input_dir}", file=sys.stderr)
 	print(f"Output: {args.output_dir}", file=sys.stderr)
+	if args.backend in ("spacy", "spacy+llm", "corenlp"):
+		print(f"Sentence split: newline={args.ssplit}, threads={args.threads}", file=sys.stderr)
 	if args.chunks:
 		print(f"Sampling: {args.chunks} × {args.chunk_size} sentences, seed={args.seed}", file=sys.stderr)
 	print("", file=sys.stderr)
@@ -643,11 +668,13 @@ Examples:
 	elif args.backend == "corenlp":
 		process_corenlp(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
 	elif args.backend == "spacy":
-		process_spacy(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
+		process_spacy(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite,
+		              args.ssplit, args.threads)
 	elif args.backend == "spacy+llm":
 		process_spacy_llm(
 			args.input_dir, args.output_dir, args.lang, args.format, args.model,
-			args.limit, args.overwrite, args.prompt, args.chunks, args.chunk_size, args.seed
+			args.limit, args.overwrite, args.prompt, args.chunks, args.chunk_size, args.seed,
+			args.ssplit, args.threads
 		)
 	
 	print("\nDone.", file=sys.stderr)
