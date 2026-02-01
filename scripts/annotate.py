@@ -19,7 +19,13 @@ import os
 import random
 import re
 import sys
+import copy
 from pathlib import Path
+from conllu_tools import (
+    apply_corrections,
+    validate_tree,
+    apply_deterministic_fixes,
+)
 
 
 # -----------------------------------------------------------------------------
@@ -318,49 +324,45 @@ def _openai_corrections(client, sent_text, tokens, lang, model, prompt):
 	return corrections, usage.prompt_tokens, usage.completion_tokens
 
 
-def apply_corrections(tokens, corrections):
-	"""Apply corrections to token list (mutates and returns tokens)."""
-	token_map = {t["id"]: t for t in tokens}
-	
-	for c in corrections:
-		tok_id = c.get("id")
-		field = c.get("field")
-		value = c.get("value")
-		
-		if tok_id in token_map and field in ("head", "deprel", "upos", "lemma", "xpos", "feats"):
-			token_map[tok_id][field] = value
-	
-	return tokens
-
-
 def apply_llm_corrections(sentences, llm_client, model, prompt, lang):
-	"""
-	Apply LLM corrections to all sentences.
-	
-	Returns: (corrected_sentences, stats_dict)
-	"""
-	corrected = []
-	stats = {"input_tokens": 0, "output_tokens": 0, "corrections": 0, "errors": 0}
-	
-	for sent_id, sent_text, tokens in sentences:
-		try:
-			corrections, in_toks, out_toks = get_llm_corrections(
-				llm_client, sent_text, tokens, lang, model, prompt
-			)
-			stats["input_tokens"] += in_toks
-			stats["output_tokens"] += out_toks
-			
-			if corrections:
-				stats["corrections"] += len(corrections)
-				tokens = apply_corrections(tokens, corrections)
-		
-		except Exception as e:
-			print(f"    [{sent_id}] ERROR: {e}", file=sys.stderr)
-			stats["errors"] += 1
-		
-		corrected.append((sent_id, sent_text, tokens))
-	
-	return corrected, stats
+    """
+    Apply LLM corrections to all sentences with validation.
+
+    Returns: (corrected_sentences, stats_dict)
+    """
+    corrected = []
+    stats = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "corrections": 0,
+        "applied": 0,
+        "rejected_cycles": 0,
+        "errors": 0,
+    }
+    for sent_id, sent_text, tokens in sentences:
+        try:
+            corrections, in_toks, out_toks = get_llm_corrections(
+                llm_client, sent_text, tokens, lang, model, prompt
+            )
+            stats["input_tokens"] += in_toks
+            stats["output_tokens"] += out_toks
+            stats["corrections"] += len(corrections)
+            if corrections:
+                candidate, n_applied = apply_corrections(tokens, corrections)
+                validation = validate_tree(candidate)
+                if validation["valid"]:
+                    tokens = candidate
+                    stats["applied"] += n_applied
+                else:
+                    stats["rejected_cycles"] += 1
+                    print(f"    [{sent_id}] Rejected: {validation}", file=sys.stderr)
+            tokens, _ = apply_deterministic_fixes(tokens)
+        except Exception as e:
+            print(f"    [{sent_id}] ERROR: {e}", file=sys.stderr)
+            stats["errors"] += 1
+
+        corrected.append((sent_id, sent_text, tokens))
+    return corrected, stats
 
 
 # -----------------------------------------------------------------------------
@@ -545,8 +547,15 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	llm_client = get_llm_client(model)
 	ext = ".json" if fmt == "json" else ".conllu"
 	
-	# Accumulators
-	total_stats = {"input_tokens": 0, "output_tokens": 0, "corrections": 0, "sentences": 0}
+	total_stats = {
+		"input_tokens": 0,
+		"output_tokens": 0,
+		"corrections": 0,
+		"applied": 0,
+		"rejected_cycles": 0,
+		"errors": 0,
+		"sentences": 0,
+	}
 	
 	with CoreNLPClient(
 		annotators=["tokenize", "ssplit"],
@@ -567,13 +576,14 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 				sentences = sample_chunks(sentences, chunks, chunk_size, seed=file_seed)
 				print(f"    Sampled {len(sentences)} sentences", file=sys.stderr)
 			
-			# Apply LLM corrections
 			sentences, stats = apply_llm_corrections(sentences, llm_client, model, prompt, lang)
 			
-			# Accumulate stats
 			total_stats["input_tokens"] += stats["input_tokens"]
 			total_stats["output_tokens"] += stats["output_tokens"]
 			total_stats["corrections"] += stats["corrections"]
+			total_stats["applied"] += stats["applied"]
+			total_stats["rejected_cycles"] += stats["rejected_cycles"]
+			total_stats["errors"] += stats["errors"]
 			total_stats["sentences"] += len(sentences)
 			
 			# Write output
@@ -586,6 +596,9 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	print(f"Sentences: {total_stats['sentences']}", file=sys.stderr)
 	print(f"Corrections: {total_stats['corrections']}", file=sys.stderr)
 	print(f"Tokens: {total_stats['input_tokens']:,} in / {total_stats['output_tokens']:,} out", file=sys.stderr)
+	print(f"Corrections proposed: {total_stats['corrections']}", file=sys.stderr)
+	print(f"Corrections applied: {total_stats['applied']}", file=sys.stderr)
+	print(f"Rejected (cycles): {total_stats['rejected_cycles']}", file=sys.stderr)
 	
 	if model.startswith("claude-"):
 		rate = (15, 75) if "opus" in model else (3, 15)
