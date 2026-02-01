@@ -72,44 +72,6 @@ LOWERCASE LEMMAS:
 
 ADJ, ADP, ADV, AUX, CCONJ, DET, INTJ, NOUN, NUM, PART, PRON, PROPN, PUNCT, SCONJ, SYM, VERB, X
 
-=== EXAMPLES ===
-
-Input:
-1	L'	l'	DET	_
-2	homme	homme	NOUN	Gender=Masc|Number=Sing
-3	du	du	ADP	_
-4	village	village	NOUN	Gender=Masc|Number=Sing
-Corrections: l'→le (masc noun follows), du→de
-
-Input:
-1	Elle	elle	PRON	Gender=Fem|Number=Sing|Person=3|PronType=Prs
-2	lui	lui	PRON	Gender=Masc|Number=Sing|Person=3|PronType=Prs
-3	donna	donner	VERB	Mood=Ind|Number=Sing|Person=3|Tense=Past|VerbForm=Fin
-4	sa	sa	DET	Gender=Fem|Number=Sing|Number[psor]=Sing|Person[psor]=3|Poss=Yes|PronType=Prs
-5	main	main	NOUN	Gender=Fem|Number=Sing
-Corrections: elle→il, lui→il, sa→son
-
-Input:
-1	les	le	DET	Definite=Def|Gender=Masc|Number=Plur|PronType=Art
-2	fenêtres	fenêtre	NOUN	Gender=Fem|Number=Plur
-3	fermées	fermer	VERB	Gender=Fem|Number=Plur|Tense=Past|VerbForm=Part
-Corrections: fermées upos VERB→ADJ (modifies noun)
-
-Input:
-1	le	le	DET	Definite=Def|Gender=Masc|Number=Sing|PronType=Art
-2	désir	désir	NOUN	Gender=Masc|Number=Sing
-3	que	que	SCONJ	_
-4	rien	rien	PRON	Gender=Masc|Number=Sing|Person=3|PronType=Neg
-5	n'	ne	ADV	Polarity=Neg
-6	endort	endormir	VERB	Mood=Ind|Number=Sing|Person=3|Tense=Pres|VerbForm=Fin
-Corrections: que upos SCONJ→PRON (relative pronoun, object of "endort")
-
-Input:
-1	Il	il	PRON	Gender=Masc|Number=Sing|Person=3|PronType=Prs
-2	eût	avoir	AUX	Mood=Ind|Number=Sing|Person=3|Tense=Past|VerbForm=Fin
-3	voulu	vouloir	VERB	Gender=Masc|Number=Sing|Tense=Past|VerbForm=Part
-Corrections: eût feats Mood=Ind→Mood=Sub (pluperfect subjunctive)
-
 === OUTPUT FORMAT ===
 
 {
