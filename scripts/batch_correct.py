@@ -10,7 +10,7 @@ Workflow:
     python batch_correct.py prepare tombe.conllu -p prompt_surface.txt -o work/
     # Creates: work/tombe.jsonl, work/tombe.mapping.json
 
-    # Submit
+    # Submit (seeds 1h cache, then submits batch)
     python batch_correct.py submit work/tombe.jsonl
     # Creates: work/tombe.state.json
 
@@ -165,7 +165,7 @@ def cmd_prepare(args):
 				"model": args.model,
 				"max_tokens": 1024,
 				"system": [
-					{"type": "text", "text": prompt, "cache_control": {"type": "ephemeral"}}
+					{"type": "text", "text": prompt, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
 				],
 				"messages": [
 					{"role": "user", "content": format_tokens_for_llm(tokens)}
@@ -204,21 +204,32 @@ def cmd_submit(args):
 	with open(jsonl_path, encoding="utf-8") as f:
 		raw_requests = [json.loads(line) for line in f]
 
-	requests = [
-		Request(
+	def make_request(r):
+		return Request(
 			custom_id=r["custom_id"],
 			params=MessageCreateParamsNonStreaming(**r["params"])
 		)
-		for r in raw_requests
-	]
 
 	client = anthropic.Anthropic()
-	print(f"Submitting {len(requests)} requests ({stem})...", file=sys.stderr)
+
+	# Warm 1h cache with a single-request seed batch
+	print(f"Warming cache ({stem})...", file=sys.stderr)
+	seed_batch = client.messages.batches.create(requests=[make_request(raw_requests[0])])
+	while True:
+		status = client.messages.batches.retrieve(seed_batch.id)
+		if status.processing_status == "ended":
+			break
+		time.sleep(5)
+	print(f"Cache warm. Submitting {len(raw_requests)} requests...", file=sys.stderr)
+
+	# Submit full batch — requests should hit the warm cache
+	requests = [make_request(r) for r in raw_requests]
 	batch = client.messages.batches.create(requests=requests)
 
 	state_path = jsonl_path.with_suffix(".state.json")
 	state = {
 		"batch_id": batch.id,
+		"seed_batch_id": seed_batch.id,
 		"stem": stem,
 		"input_conllu": input_conllu,
 		"output_dir": str(jsonl_path.parent.resolve()),
