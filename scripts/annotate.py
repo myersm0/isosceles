@@ -3,15 +3,15 @@
 Annotation pipeline for the isosceles corpus.
 
 Backends:
-  stanza      - Stanza for tokenization and parsing (baseline)
-  corenlp     - CoreNLP for everything (requires CORENLP_HOME)
-  spacy       - CoreNLP segmentation + spaCy parsing
-  spacy+llm   - CoreNLP segmentation + spaCy parsing + LLM corrections
+    stanza      - Stanza for tokenization and parsing (baseline)
+    corenlp     - CoreNLP for everything (requires CORENLP_HOME)
+    spacy       - CoreNLP segmentation + spaCy parsing
+    spacy+llm   - CoreNLP segmentation + spaCy parsing + LLM corrections
 
 Examples:
-  python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
-  python annotate.py data/eltec/fr/txt data/gold -l fr -b spacy+llm \\
-      -m claude-opus-4-20250514 --chunks 1 --chunk-size 20 --seed 42
+    python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
+    python annotate.py data/eltec/fr/txt data/gold -l fr -b spacy+llm \\
+        -m claude-opus-4-20250514 --chunks 1 --chunk-size 20 --seed 42
 """
 import argparse
 import json
@@ -324,45 +324,101 @@ def _openai_corrections(client, sent_text, tokens, lang, model, prompt):
 	return corrections, usage.prompt_tokens, usage.completion_tokens
 
 
+def apply_non_structural_corrections(tokens, corrections):
+	"""Apply only lemma/upos/xpos/feats corrections (cannot break tree validity)."""
+	tokens = copy.deepcopy(tokens)
+	token_map = {t["id"]: t for t in tokens}
+	safe_fields = {"lemma", "upos", "xpos", "feats"}
+	n_applied = 0
+	
+	for c in corrections:
+		tok_id = c.get("id")
+		field = c.get("field")
+		value = c.get("value")
+		if field not in safe_fields:
+			continue
+		try:
+			tok_id = int(tok_id)
+		except (ValueError, TypeError):
+			continue
+		if tok_id not in token_map:
+			continue
+		token_map[tok_id][field] = value
+		n_applied += 1
+	
+	return tokens, n_applied
+
+
+def log_rejected_corrections(sent_id, sent_text, tokens, corrections, validation):
+	"""Log rejected corrections to stderr for later analysis."""
+	structural = [c for c in corrections if c.get("field") in ("head", "deprel")]
+	non_structural = [c for c in corrections if c.get("field") not in ("head", "deprel")]
+	
+	print(f"    [{sent_id}] Rejected: {validation}", file=sys.stderr)
+	print(f"      Text: {sent_text[:80]}{'...' if len(sent_text) > 80 else ''}", file=sys.stderr)
+	
+	if structural:
+		print(f"      Structural ({len(structural)}):", file=sys.stderr)
+		token_map = {t["id"]: t["form"] for t in tokens}
+		for c in structural[:5]:
+			form = token_map.get(c.get("id"), "?")
+			print(f"        {c.get('id')} '{form}': {c.get('field')} → {c.get('value')}", file=sys.stderr)
+		if len(structural) > 5:
+			print(f"        ... +{len(structural) - 5} more", file=sys.stderr)
+	
+	if non_structural:
+		print(f"      Non-structural ({len(non_structural)}): will apply as partial fix", file=sys.stderr)
+
+
 def apply_llm_corrections(sentences, llm_client, model, prompt, lang):
-    """
-    Apply LLM corrections to all sentences with validation.
-
-    Returns: (corrected_sentences, stats_dict)
-    """
-    corrected = []
-    stats = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "corrections": 0,
-        "applied": 0,
-        "rejected_cycles": 0,
-        "errors": 0,
-    }
-    for sent_id, sent_text, tokens in sentences:
-        try:
-            corrections, in_toks, out_toks = get_llm_corrections(
-                llm_client, sent_text, tokens, lang, model, prompt
-            )
-            stats["input_tokens"] += in_toks
-            stats["output_tokens"] += out_toks
-            stats["corrections"] += len(corrections)
-            if corrections:
-                candidate, n_applied = apply_corrections(tokens, corrections)
-                validation = validate_tree(candidate)
-                if validation["valid"]:
-                    tokens = candidate
-                    stats["applied"] += n_applied
-                else:
-                    stats["rejected_cycles"] += 1
-                    print(f"    [{sent_id}] Rejected: {validation}", file=sys.stderr)
-            tokens, _ = apply_deterministic_fixes(tokens)
-        except Exception as e:
-            print(f"    [{sent_id}] ERROR: {e}", file=sys.stderr)
-            stats["errors"] += 1
-
-        corrected.append((sent_id, sent_text, tokens))
-    return corrected, stats
+	"""
+	Apply LLM corrections with validation and partial acceptance.
+	
+	If full corrections create an invalid tree, falls back to applying only
+	non-structural corrections (lemma, upos, xpos, feats).
+	"""
+	corrected = []
+	stats = {
+		"input_tokens": 0,
+		"output_tokens": 0,
+		"corrections": 0,
+		"applied": 0,
+		"rejected_structural": 0,
+		"partial_applied": 0,
+		"errors": 0,
+	}
+	
+	for sent_id, sent_text, tokens in sentences:
+		try:
+			corrections, in_toks, out_toks = get_llm_corrections(
+				llm_client, sent_text, tokens, lang, model, prompt
+			)
+			stats["input_tokens"] += in_toks
+			stats["output_tokens"] += out_toks
+			stats["corrections"] += len(corrections)
+			
+			if corrections:
+				candidate, n_applied = apply_corrections(tokens, corrections)
+				validation = validate_tree(candidate)
+				
+				if validation["valid"]:
+					tokens = candidate
+					stats["applied"] += n_applied
+				else:
+					stats["rejected_structural"] += 1
+					log_rejected_corrections(sent_id, sent_text, tokens, corrections, validation)
+					tokens, n_partial = apply_non_structural_corrections(tokens, corrections)
+					stats["partial_applied"] += n_partial
+			
+			tokens, _ = apply_deterministic_fixes(tokens)
+		
+		except Exception as e:
+			print(f"    [{sent_id}] ERROR: {e}", file=sys.stderr)
+			stats["errors"] += 1
+		
+		corrected.append((sent_id, sent_text, tokens))
+	
+	return corrected, stats
 
 
 # -----------------------------------------------------------------------------
@@ -552,7 +608,8 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 		"output_tokens": 0,
 		"corrections": 0,
 		"applied": 0,
-		"rejected_cycles": 0,
+		"rejected_structural": 0,
+		"partial_applied": 0,
 		"errors": 0,
 		"sentences": 0,
 	}
@@ -582,7 +639,8 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 			total_stats["output_tokens"] += stats["output_tokens"]
 			total_stats["corrections"] += stats["corrections"]
 			total_stats["applied"] += stats["applied"]
-			total_stats["rejected_cycles"] += stats["rejected_cycles"]
+			total_stats["rejected_structural"] += stats["rejected_structural"]
+			total_stats["partial_applied"] += stats["partial_applied"]
 			total_stats["errors"] += stats["errors"]
 			total_stats["sentences"] += len(sentences)
 			
@@ -594,11 +652,12 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	print(f"\n=== Summary ===", file=sys.stderr)
 	print(f"Files: {len(files)}", file=sys.stderr)
 	print(f"Sentences: {total_stats['sentences']}", file=sys.stderr)
-	print(f"Corrections: {total_stats['corrections']}", file=sys.stderr)
 	print(f"Tokens: {total_stats['input_tokens']:,} in / {total_stats['output_tokens']:,} out", file=sys.stderr)
 	print(f"Corrections proposed: {total_stats['corrections']}", file=sys.stderr)
-	print(f"Corrections applied: {total_stats['applied']}", file=sys.stderr)
-	print(f"Rejected (cycles): {total_stats['rejected_cycles']}", file=sys.stderr)
+	print(f"Corrections applied (full): {total_stats['applied']}", file=sys.stderr)
+	print(f"Corrections applied (partial): {total_stats['partial_applied']}", file=sys.stderr)
+	print(f"Rejected (invalid tree): {total_stats['rejected_structural']}", file=sys.stderr)
+	print(f"Errors: {total_stats['errors']}", file=sys.stderr)
 	
 	if model.startswith("claude-"):
 		rate = (15, 75) if "opus" in model else (3, 15)
@@ -677,12 +736,17 @@ Examples:
 	
 	# Dispatch
 	if args.backend == "stanza":
-		process_stanza(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
+		process_stanza(
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
+		)
 	elif args.backend == "corenlp":
-		process_corenlp(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite)
+		process_corenlp(
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
+		)
 	elif args.backend == "spacy":
-		process_spacy(args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite,
-		              args.ssplit, args.threads)
+		process_spacy(
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite, args.ssplit, args.threads
+		)
 	elif args.backend == "spacy+llm":
 		process_spacy_llm(
 			args.input_dir, args.output_dir, args.lang, args.format, args.model,

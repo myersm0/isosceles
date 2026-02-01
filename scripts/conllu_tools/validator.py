@@ -6,12 +6,12 @@ UD parse validator and deterministic fixer.
 from typing import Optional
 
 
-lemma_corrections = {
-	("elle", "lui"): "elle",
-	("elles", "leur"): "elles",
-	("il", "le"): "il",
-	("je", "me"): "je",
-	("tu", "te"): "tu",
+# Genuine lemma errors: (form_lower, wrong_lemma, upos) → correct_lemma
+lemma_error_rules = {
+	# "sous" (preposition) mislemmatized as "sou" (old coin)
+	("sous", "sou", "ADP"): "sous",
+	# "puis" (adverb "then") mislemmatized as "pouvoir"
+	("puis", "pouvoir", "ADV"): "puis",
 }
 
 
@@ -159,18 +159,20 @@ def validate_tree(tokens: list[dict]) -> dict:
 
 def apply_deterministic_fixes(tokens: list[dict]) -> tuple[list[dict], list[str]]:
 	"""
-	Apply deterministic lemma fixes.
+	Apply deterministic lemma fixes for genuine errors only.
 	Returns: (tokens, list of changes made)
 	"""
 	changes = []
 	
 	for tok in tokens:
 		form_lower = tok["form"].lower()
-		key = (form_lower, tok["lemma"].lower())
+		lemma_lower = tok["lemma"].lower()
+		upos = tok["upos"]
+		key = (form_lower, lemma_lower, upos)
 		
-		if key in lemma_corrections:
+		if key in lemma_error_rules:
 			old_lemma = tok["lemma"]
-			new_lemma = lemma_corrections[key]
+			new_lemma = lemma_error_rules[key]
 			tok["lemma"] = new_lemma
 			changes.append(f"Token {tok['id']}: lemma {old_lemma} → {new_lemma}")
 	
