@@ -3,15 +3,15 @@
 Annotation pipeline for the isosceles corpus.
 
 Backends:
-    stanza      - Stanza for tokenization and parsing (baseline)
-    corenlp     - CoreNLP for everything (requires CORENLP_HOME)
-    spacy       - CoreNLP segmentation + spaCy parsing
-    spacy+llm   - CoreNLP segmentation + spaCy parsing + LLM corrections
+  stanza      - Stanza for tokenization and parsing (baseline)
+  corenlp     - CoreNLP for everything (requires CORENLP_HOME)
+  spacy       - CoreNLP segmentation + spaCy parsing
+  spacy+llm   - CoreNLP segmentation + spaCy parsing + LLM corrections
 
 Examples:
-    python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
-    python annotate.py data/eltec/fr/txt data/gold -l fr -b spacy+llm \\
-        -m claude-opus-4-20250514 --chunks 1 --chunk-size 20 --seed 42
+  python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
+  python annotate.py data/eltec/fr/txt data/gold -l fr -b spacy+llm \\
+      -m claude-opus-4-20250514 --chunks 1 --chunk-size 20 --seed 42
 """
 import argparse
 import json
@@ -74,7 +74,7 @@ def build_corenlp_props(lang, ssplit="two", threads=None):
 	props = {
 		"pipelineLanguage": lang,
 		"ssplit.newlineIsSentenceBreak": ssplit,
-	    "tokenize.whitespace": "false",  # might help?
+		"tokenize.whitespace": "false",  # might help?
 	}
 	if threads:
 		props["threads"] = str(threads)
@@ -268,18 +268,21 @@ def get_llm_client(model):
 		return openai.OpenAI()
 
 
-def get_llm_corrections(client, sent_text, tokens, lang, model, prompt):
+def get_llm_corrections(client, sent_text, tokens, lang, model, prompt, simplified=False):
 	"""Get corrections from LLM."""
 	if model.startswith("claude-"):
-		return _anthropic_corrections(client, sent_text, tokens, lang, model, prompt)
+		return _anthropic_corrections(client, sent_text, tokens, lang, model, prompt, simplified)
 	else:
-		return _openai_corrections(client, sent_text, tokens, lang, model, prompt)
+		return _openai_corrections(client, sent_text, tokens, lang, model, prompt, simplified)
 
 
-def _format_parse_for_llm(tokens, lang):
+def _format_parse_for_llm(tokens, lang, simplified=False):
 	lang_name = "French" if lang == "fr" else "English"
-	lines = [f"{t['id']}\t{t['form']}\t{t['lemma']}\t{t['upos']}\t{t['head']}\t{t['deprel']}"
-	         for t in tokens]
+	if simplified:
+		lines = [f"{t['id']}\t{t['form']}\t{t['lemma']}\t{t['upos']}\t{t.get('feats', '_') or '_'}" for t in tokens]
+	else:
+		lines = [f"{t['id']}\t{t['form']}\t{t['lemma']}\t{t['upos']}\t{t['head']}\t{t['deprel']}"
+				 for t in tokens]
 	return lang_name, "\n".join(lines)
 
 
@@ -293,35 +296,44 @@ def _parse_corrections_json(response_text):
 	return []
 
 
-def _anthropic_corrections(client, sent_text, tokens, lang, model, prompt):
-	lang_name, parse_str = _format_parse_for_llm(tokens, lang)
+def _anthropic_corrections(client, sent_text, tokens, lang, model, prompt, simplified=False):
+	lang_name, parse_str = _format_parse_for_llm(tokens, lang, simplified)
 	
 	response = client.messages.create(
 		model=model,
 		max_tokens=1024,
 		system=[{"type": "text", "text": prompt, "cache_control": {"type": "ephemeral"}}],
-		messages=[{"role": "user", "content": f"{lang_name} sentence:\n{sent_text}\n\nParse:\n{parse_str}"}]
+		messages=[{"role": "user", "content": f"{parse_str}"}] if simplified else
+				 [{"role": "user", "content": f"{lang_name} sentence:\n{sent_text}\n\nParse:\n{parse_str}"}]
 	)
 	
 	corrections = _parse_corrections_json(response.content[0].text)
-	return corrections, response.usage.input_tokens, response.usage.output_tokens
+	usage = response.usage
+	cache_stats = {
+		"cache_created": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+		"cache_read": getattr(usage, "cache_read_input_tokens", 0) or 0,
+	}
+	return corrections, usage.input_tokens, usage.output_tokens, cache_stats
 
 
-def _openai_corrections(client, sent_text, tokens, lang, model, prompt):
-	lang_name, parse_str = _format_parse_for_llm(tokens, lang)
+def _openai_corrections(client, sent_text, tokens, lang, model, prompt, simplified=False):
+	lang_name, parse_str = _format_parse_for_llm(tokens, lang, simplified)
+	
+	user_content = parse_str if simplified else f"{lang_name} sentence:\n{sent_text}\n\nParse:\n{parse_str}"
 	
 	response = client.chat.completions.create(
 		model=model,
 		max_completion_tokens=1024,
 		messages=[
 			{"role": "system", "content": prompt},
-			{"role": "user", "content": f"{lang_name} sentence:\n{sent_text}\n\nParse:\n{parse_str}"}
+			{"role": "user", "content": user_content}
 		]
 	)
 	
 	corrections = _parse_corrections_json(response.choices[0].message.content)
 	usage = response.usage
-	return corrections, usage.prompt_tokens, usage.completion_tokens
+	cache_stats = {"cache_created": 0, "cache_read": 0}
+	return corrections, usage.prompt_tokens, usage.completion_tokens, cache_stats
 
 
 def apply_non_structural_corrections(tokens, corrections):
@@ -354,33 +366,36 @@ def log_rejected_corrections(sent_id, sent_text, tokens, corrections, validation
 	structural = [c for c in corrections if c.get("field") in ("head", "deprel")]
 	non_structural = [c for c in corrections if c.get("field") not in ("head", "deprel")]
 	
-	print(f"    [{sent_id}] Rejected: {validation}", file=sys.stderr)
-	print(f"      Text: {sent_text[:80]}{'...' if len(sent_text) > 80 else ''}", file=sys.stderr)
+	print(f"	[{sent_id}] Rejected: {validation}", file=sys.stderr)
+	print(f"	  Text: {sent_text[:80]}{'...' if len(sent_text) > 80 else ''}", file=sys.stderr)
 	
 	if structural:
-		print(f"      Structural ({len(structural)}):", file=sys.stderr)
+		print(f"	  Structural ({len(structural)}):", file=sys.stderr)
 		token_map = {t["id"]: t["form"] for t in tokens}
 		for c in structural[:5]:
 			form = token_map.get(c.get("id"), "?")
-			print(f"        {c.get('id')} '{form}': {c.get('field')} → {c.get('value')}", file=sys.stderr)
+			print(f"		{c.get('id')} '{form}': {c.get('field')} → {c.get('value')}", file=sys.stderr)
 		if len(structural) > 5:
-			print(f"        ... +{len(structural) - 5} more", file=sys.stderr)
+			print(f"		... +{len(structural) - 5} more", file=sys.stderr)
 	
 	if non_structural:
-		print(f"      Non-structural ({len(non_structural)}): will apply as partial fix", file=sys.stderr)
+		print(f"	  Non-structural ({len(non_structural)}): will apply as partial fix", file=sys.stderr)
 
 
-def apply_llm_corrections(sentences, llm_client, model, prompt, lang):
+def apply_llm_corrections(sentences, llm_client, model, prompt, lang, mode="full"):
 	"""
 	Apply LLM corrections with validation and partial acceptance.
 	
-	If full corrections create an invalid tree, falls back to applying only
-	non-structural corrections (lemma, upos, xpos, feats).
+	mode="full": structural corrections with validation, falls back to non-structural
+	mode="surface": lemma/upos/feats corrections only, no validation needed
 	"""
 	corrected = []
+	simplified = (mode == "surface")
 	stats = {
 		"input_tokens": 0,
 		"output_tokens": 0,
+		"cache_created": 0,
+		"cache_read": 0,
 		"corrections": 0,
 		"applied": 0,
 		"rejected_structural": 0,
@@ -390,30 +405,37 @@ def apply_llm_corrections(sentences, llm_client, model, prompt, lang):
 	
 	for sent_id, sent_text, tokens in sentences:
 		try:
-			corrections, in_toks, out_toks = get_llm_corrections(
-				llm_client, sent_text, tokens, lang, model, prompt
+			corrections, in_toks, out_toks, cache = get_llm_corrections(
+				llm_client, sent_text, tokens, lang, model, prompt, simplified
 			)
 			stats["input_tokens"] += in_toks
 			stats["output_tokens"] += out_toks
+			stats["cache_created"] += cache["cache_created"]
+			stats["cache_read"] += cache["cache_read"]
 			stats["corrections"] += len(corrections)
 			
 			if corrections:
-				candidate, n_applied = apply_corrections(tokens, corrections)
-				validation = validate_tree(candidate)
-				
-				if validation["valid"]:
-					tokens = candidate
+				if simplified:
+					tokens, n_applied = apply_non_structural_corrections(tokens, corrections)
 					stats["applied"] += n_applied
 				else:
-					stats["rejected_structural"] += 1
-					log_rejected_corrections(sent_id, sent_text, tokens, corrections, validation)
-					tokens, n_partial = apply_non_structural_corrections(tokens, corrections)
-					stats["partial_applied"] += n_partial
+					candidate, n_applied = apply_corrections(tokens, corrections)
+					validation = validate_tree(candidate)
+					
+					if validation["valid"]:
+						tokens = candidate
+						stats["applied"] += n_applied
+					else:
+						stats["rejected_structural"] += 1
+						log_rejected_corrections(sent_id, sent_text, tokens, corrections, validation)
+						tokens, n_partial = apply_non_structural_corrections(tokens, corrections)
+						stats["partial_applied"] += n_partial
 			
-			tokens, _ = apply_deterministic_fixes(tokens)
+			if mode == "full":
+				tokens, _ = apply_deterministic_fixes(tokens)
 		
 		except Exception as e:
-			print(f"    [{sent_id}] ERROR: {e}", file=sys.stderr)
+			print(f"	[{sent_id}] ERROR: {e}", file=sys.stderr)
 			stats["errors"] += 1
 		
 		corrected.append((sent_id, sent_text, tokens))
@@ -570,7 +592,8 @@ def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False,
 # -----------------------------------------------------------------------------
 
 def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overwrite=False,
-                      prompt_path=None, chunks=None, chunk_size=20, seed=None, ssplit="two", threads=None):
+					  prompt_path=None, chunks=None, chunk_size=20, seed=None, ssplit="two", threads=None,
+					  mode="full"):
 	from stanza.server import CoreNLPClient
 	
 	input_dir = Path(input_dir)
@@ -606,6 +629,8 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	total_stats = {
 		"input_tokens": 0,
 		"output_tokens": 0,
+		"cache_created": 0,
+		"cache_read": 0,
 		"corrections": 0,
 		"applied": 0,
 		"rejected_structural": 0,
@@ -631,12 +656,14 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 			if chunks and chunks > 0:
 				file_seed = file_seeds.get(filepath.stem)
 				sentences = sample_chunks(sentences, chunks, chunk_size, seed=file_seed)
-				print(f"    Sampled {len(sentences)} sentences", file=sys.stderr)
+				print(f"	Sampled {len(sentences)} sentences", file=sys.stderr)
 			
-			sentences, stats = apply_llm_corrections(sentences, llm_client, model, prompt, lang)
+			sentences, stats = apply_llm_corrections(sentences, llm_client, model, prompt, lang, mode)
 			
 			total_stats["input_tokens"] += stats["input_tokens"]
 			total_stats["output_tokens"] += stats["output_tokens"]
+			total_stats["cache_created"] += stats["cache_created"]
+			total_stats["cache_read"] += stats["cache_read"]
 			total_stats["corrections"] += stats["corrections"]
 			total_stats["applied"] += stats["applied"]
 			total_stats["rejected_structural"] += stats["rejected_structural"]
@@ -653,6 +680,11 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	print(f"Files: {len(files)}", file=sys.stderr)
 	print(f"Sentences: {total_stats['sentences']}", file=sys.stderr)
 	print(f"Tokens: {total_stats['input_tokens']:,} in / {total_stats['output_tokens']:,} out", file=sys.stderr)
+	if model.startswith("claude-"):
+		cache_total = total_stats["cache_created"] + total_stats["cache_read"]
+		if cache_total > 0:
+			hit_rate = total_stats["cache_read"] / cache_total * 100
+			print(f"Cache: {total_stats['cache_read']:,} read / {total_stats['cache_created']:,} created ({hit_rate:.1f}% hit rate)", file=sys.stderr)
 	print(f"Corrections proposed: {total_stats['corrections']}", file=sys.stderr)
 	print(f"Corrections applied (full): {total_stats['applied']}", file=sys.stderr)
 	print(f"Corrections applied (partial): {total_stats['partial_applied']}", file=sys.stderr)
@@ -660,8 +692,18 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 	print(f"Errors: {total_stats['errors']}", file=sys.stderr)
 	
 	if model.startswith("claude-"):
-		rate = (15, 75) if "opus" in model else (3, 15)
-		cost = (total_stats["input_tokens"] * rate[0] + total_stats["output_tokens"] * rate[1]) / 1_000_000
+		# Pricing: cache writes +25%, cache reads -90%
+		if "opus" in model:
+			base_in, base_out = 15, 75
+		else:
+			base_in, base_out = 3, 15
+		uncached_in = total_stats["input_tokens"] - total_stats["cache_created"] - total_stats["cache_read"]
+		cost = (
+			uncached_in * base_in +
+			total_stats["cache_created"] * base_in * 1.25 +
+			total_stats["cache_read"] * base_in * 0.1 +
+			total_stats["output_tokens"] * base_out
+		) / 1_000_000
 		print(f"Est. cost: ${cost:.2f}", file=sys.stderr)
 
 
@@ -675,22 +717,22 @@ def main():
 		formatter_class=argparse.RawDescriptionHelpFormatter,
 		epilog="""
 Backends:
-  stanza      Stanza tokenization + parsing (baseline)
-  corenlp     CoreNLP for everything (requires CORENLP_HOME)
-  spacy       CoreNLP segmentation + spaCy parsing
+  stanza	  Stanza tokenization + parsing (baseline)
+  corenlp	 CoreNLP for everything (requires CORENLP_HOME)
+  spacy	   CoreNLP segmentation + spaCy parsing
   spacy+llm   CoreNLP segmentation + spaCy parsing + LLM corrections
 
 Examples:
-  # Full document annotation
+  # Full document annotation (spaCy only)
   %(prog)s data/maupassant/fr/txt output/fr -l fr -b spacy
-  %(prog)s data/maupassant/fr/txt output/fr -l fr -b spacy+llm -m claude-sonnet-4-20250514
   
-  # Chunk sampling for training data (equal per novel)
-  %(prog)s data/eltec/fr/txt data/gold -l fr -b spacy+llm \\
-      -m claude-opus-4-20250514 --chunks 1 --chunk-size 20 --seed 42
+  # Surface corrections: lemma, UPOS, feats (recommended, most economical)
+  %(prog)s data/eltec/fr/txt output/fr -l fr -b spacy+llm \\
+	  -m claude-sonnet-4-5 -p prompt_surface.txt
   
-  %(prog)s data/eltec/fr/txt data/silver -l fr -b spacy+llm \\
-      -m claude-sonnet-4-20250514 --chunks 10 --chunk-size 20 --seed 43
+  # Full structural corrections (experimental, may introduce regressions)
+  %(prog)s data/maupassant/fr/txt output/fr -l fr -b spacy+llm \\
+	  -m claude-sonnet-4-5 --mode full -p prompt_fr.txt
 """
 	)
 	ap.add_argument("input_dir", help="Directory containing .txt files")
@@ -706,8 +748,10 @@ Examples:
 	ap.add_argument("--chunk-size", type=int, default=20, help="Sentences per chunk (default: 20)")
 	ap.add_argument("--seed", "-s", type=int, help="Random seed for reproducibility")
 	ap.add_argument("--ssplit", choices=["always", "never", "two"], default="two",
-	                help="Newline sentence break mode (default: two)")
+					help="Newline sentence break mode (default: two)")
 	ap.add_argument("--threads", "-t", type=int, default=5, help="CoreNLP threads (default: 5)")
+	ap.add_argument("--mode", choices=["full", "surface"], default="surface",
+					help="LLM correction mode: full (structural) or surface (lemma/upos/feats) (default: surface)")
 	args = ap.parse_args()
 	
 	# Validation
@@ -730,6 +774,8 @@ Examples:
 	print(f"Output: {args.output_dir}", file=sys.stderr)
 	if args.backend in ("spacy", "spacy+llm", "corenlp"):
 		print(f"Sentence split: newline={args.ssplit}, threads={args.threads}", file=sys.stderr)
+	if args.backend == "spacy+llm":
+		print(f"LLM: {args.model}, mode={args.mode}", file=sys.stderr)
 	if args.chunks:
 		print(f"Sampling: {args.chunks} × {args.chunk_size} sentences, seed={args.seed}", file=sys.stderr)
 	print("", file=sys.stderr)
@@ -751,7 +797,7 @@ Examples:
 		process_spacy_llm(
 			args.input_dir, args.output_dir, args.lang, args.format, args.model,
 			args.limit, args.overwrite, args.prompt, args.chunks, args.chunk_size, args.seed,
-			args.ssplit, args.threads
+			args.ssplit, args.threads, args.mode
 		)
 	
 	print("\nDone.", file=sys.stderr)
