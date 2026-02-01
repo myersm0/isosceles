@@ -237,6 +237,9 @@ def cmd_resume(args):
 
 	for state_file in args.state_files:
 		state_path = Path(state_file)
+		if not state_path.name.endswith(".state.json"):
+			print(f"  ✗   {state_path.name}: not a .state.json file, skipping", file=sys.stderr)
+			continue
 		with open(state_path, encoding="utf-8") as f:
 			state = json.load(f)
 
