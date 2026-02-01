@@ -11,7 +11,7 @@ Backends:
 Examples:
   python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
   python annotate.py data/eltec/fr/txt data/gold -l fr -b spacy+llm \\
-      -m claude-opus-4-20250514 --chunks 1 --chunk-size 20 --seed 42
+      -m claude-opus-4-5 --chunks 1 --chunk-size 20 --seed 42
 """
 import argparse
 import json
@@ -22,9 +22,9 @@ import sys
 import copy
 from pathlib import Path
 from conllu_tools import (
-    apply_corrections,
-    validate_tree,
-    apply_deterministic_fixes,
+	apply_corrections,
+	validate_tree,
+	apply_deterministic_fixes,
 )
 
 
@@ -697,14 +697,14 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 			base_in, base_out = 15, 75
 		else:
 			base_in, base_out = 3, 15
-		uncached_in = total_stats["input_tokens"] - total_stats["cache_created"] - total_stats["cache_read"]
+		# input_tokens = non-cached content; cache tokens reported separately
 		cost = (
-			uncached_in * base_in +
+			total_stats["input_tokens"] * base_in +
 			total_stats["cache_created"] * base_in * 1.25 +
 			total_stats["cache_read"] * base_in * 0.1 +
 			total_stats["output_tokens"] * base_out
 		) / 1_000_000
-		print(f"Est. cost: ${cost:.2f}", file=sys.stderr)
+		print(f"Est. cost: ${cost:.4f}", file=sys.stderr)
 
 
 # -----------------------------------------------------------------------------
