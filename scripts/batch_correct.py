@@ -6,24 +6,26 @@ Reads .conllu files (produced by annotate.py -b spacy), sends them to
 Anthropic's batch API for surface corrections (lemma, upos, feats), 
 and writes corrected .conllu files.
 
-Usage:
-    # Full pipeline (blocks until complete):
-    python batch_correct.py run input.conllu output_dir/ -p prompt_surface.txt
-    
-    # Or step-by-step:
+Persistent workflow (can close laptop between steps):
+
     # Step 1: Prepare batch requests
-    python batch_correct.py prepare input_dir/ -p prompt_surface.txt -o batch.jsonl
-    # Creates batch.jsonl and batch.mapping.json
+    python batch_correct.py prepare input_dir/ -p prompt_surface.txt -o mybatch.jsonl
+    # Creates: mybatch.jsonl, mybatch.mapping.json
     
     # Step 2: Submit batch
-    python batch_correct.py submit batch.jsonl
-    # Returns batch_id
+    python batch_correct.py submit mybatch.jsonl
+    # Creates: mybatch.state.json (saves batch_id)
     
-    # Step 3: Poll for completion  
-    python batch_correct.py poll <batch_id>
+    # Step 3: Check status later (non-blocking)
+    python batch_correct.py resume mybatch.state.json
+    # Shows status, tells you when ready
     
-    # Step 4: Apply results
-    python batch_correct.py apply <batch_id> input_dir/ output_dir/ -m batch.mapping.json
+    # Step 4: Apply when ready
+    python batch_correct.py resume mybatch.state.json -i input_dir/ -o output_dir/
+
+Alternative: blocking workflow (keeps terminal open):
+
+    python batch_correct.py run input_dir/ output_dir/ -p prompt_surface.txt
 """
 
 import argparse
@@ -207,8 +209,9 @@ def cmd_prepare(args):
 def cmd_submit(args):
 	"""Submit batch requests."""
 	client = anthropic.Anthropic()
+	jsonl_path = Path(args.jsonl_file)
 	
-	with open(args.jsonl_file, encoding="utf-8") as f:
+	with open(jsonl_path, encoding="utf-8") as f:
 		raw_requests = [json.loads(line) for line in f]
 	
 	requests = [
@@ -222,9 +225,21 @@ def cmd_submit(args):
 	print(f"Submitting batch with {len(requests)} requests...", file=sys.stderr)
 	batch = client.messages.batches.create(requests=requests)
 	
+	state_path = jsonl_path.with_suffix(".state.json")
+	state = {
+		"batch_id": batch.id,
+		"jsonl_file": str(jsonl_path),
+		"mapping_file": str(jsonl_path.with_suffix(".mapping.json")),
+		"created_at": batch.created_at,
+		"expires_at": batch.expires_at,
+	}
+	with open(state_path, "w", encoding="utf-8") as f:
+		json.dump(state, f, indent=2, default=str)
+	
 	print(f"Batch ID: {batch.id}", file=sys.stderr)
 	print(f"Status: {batch.processing_status}", file=sys.stderr)
 	print(f"Expires: {batch.expires_at}", file=sys.stderr)
+	print(f"State saved to: {state_path}", file=sys.stderr)
 	
 	print(batch.id)
 
@@ -250,6 +265,76 @@ def cmd_poll(args):
 			return batch
 		
 		time.sleep(args.interval)
+
+
+def cmd_status(args):
+	"""Check batch status once (no polling)."""
+	client = anthropic.Anthropic()
+	batch = client.messages.batches.retrieve(args.batch_id)
+	counts = batch.request_counts
+	
+	print(f"Batch ID: {batch.id}")
+	print(f"Status: {batch.processing_status}")
+	print(f"Created: {batch.created_at}")
+	print(f"Expires: {batch.expires_at}")
+	print(f"Requests:")
+	print(f"  Processing: {counts.processing}")
+	print(f"  Succeeded: {counts.succeeded}")
+	print(f"  Errored: {counts.errored}")
+	print(f"  Canceled: {counts.canceled}")
+	print(f"  Expired: {counts.expired}")
+	
+	if batch.processing_status == "ended":
+		print(f"\nReady to apply. Run:")
+		print(f"  python batch_correct.py apply {batch.id} <input_dir> <output_dir> -m <mapping.json>")
+
+
+def cmd_resume(args):
+	"""Resume from state file: check status, apply if ready."""
+	state_path = Path(args.state_file)
+	with open(state_path, encoding="utf-8") as f:
+		state = json.load(f)
+	
+	batch_id = state["batch_id"]
+	mapping_file = state["mapping_file"]
+	
+	client = anthropic.Anthropic()
+	batch = client.messages.batches.retrieve(batch_id)
+	counts = batch.request_counts
+	
+	print(f"Batch ID: {batch_id}")
+	print(f"Status: {batch.processing_status}")
+	print(f"  Processing: {counts.processing}")
+	print(f"  Succeeded: {counts.succeeded}")
+	print(f"  Errored: {counts.errored}")
+	
+	if batch.processing_status != "ended":
+		print(f"\nStill processing. Check again later:")
+		print(f"  python batch_correct.py resume {state_path}")
+		return
+	
+	if not args.output_dir or not args.input_dir:
+		print(f"\nReady to apply. Run:")
+		print(f"  python batch_correct.py resume {state_path} -i <input_dir> -o <output_dir>")
+		return
+	
+	print(f"\nApplying results...")
+	args.batch_id = batch_id
+	args.mapping = mapping_file
+	cmd_apply(args)
+
+
+def cmd_list(args):
+	"""List recent batches."""
+	client = anthropic.Anthropic()
+	
+	print(f"{'ID':<35} {'Status':<12} {'Succeeded':>10} {'Processing':>10} {'Created'}")
+	print("-" * 90)
+	
+	for batch in client.messages.batches.list(limit=args.limit):
+		counts = batch.request_counts
+		created = str(batch.created_at)[:19] if batch.created_at else "?"
+		print(f"{batch.id:<35} {batch.processing_status:<12} {counts.succeeded:>10} {counts.processing:>10} {created}")
 
 
 def cmd_apply(args):
@@ -368,6 +453,20 @@ def main():
 	p_poll.add_argument("batch_id", help="Batch ID")
 	p_poll.add_argument("--interval", "-i", type=int, default=60, help="Poll interval in seconds")
 	p_poll.set_defaults(func=cmd_poll)
+	
+	p_status = subparsers.add_parser("status", help="Check batch status once")
+	p_status.add_argument("batch_id", help="Batch ID")
+	p_status.set_defaults(func=cmd_status)
+	
+	p_resume = subparsers.add_parser("resume", help="Resume from state file")
+	p_resume.add_argument("state_file", help="Path to .state.json file")
+	p_resume.add_argument("--input-dir", "-i", help="Directory with original .conllu files")
+	p_resume.add_argument("--output-dir", "-o", help="Output directory (if ready to apply)")
+	p_resume.set_defaults(func=cmd_resume)
+	
+	p_list = subparsers.add_parser("list", help="List recent batches")
+	p_list.add_argument("--limit", "-n", type=int, default=10, help="Number of batches to show")
+	p_list.set_defaults(func=cmd_list)
 	
 	p_apply = subparsers.add_parser("apply", help="Apply batch results")
 	p_apply.add_argument("batch_id", help="Batch ID")
