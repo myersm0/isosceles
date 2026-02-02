@@ -3,10 +3,11 @@
 Annotation pipeline for the isosceles corpus.
 
 Backends:
-  stanza      - Stanza for tokenization and parsing (baseline)
-  corenlp     - CoreNLP for everything (requires CORENLP_HOME)
-  spacy       - CoreNLP segmentation + spaCy parsing
-  spacy+llm   - CoreNLP segmentation + spaCy parsing + LLM corrections
+  stanza         - Stanza for tokenization and parsing (baseline)
+  stanza+corenlp - CoreNLP segmentation + Stanza parsing
+  corenlp        - CoreNLP for everything (requires CORENLP_HOME)
+  spacy          - CoreNLP segmentation + spaCy parsing
+  spacy+llm      - CoreNLP segmentation + spaCy parsing + LLM corrections
 
 Examples:
   python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
@@ -491,6 +492,94 @@ def process_stanza(input_dir, output_dir, lang, fmt, limit=None, overwrite=False
 
 
 # -----------------------------------------------------------------------------
+# Stanza + CoreNLP segmentation backend
+# -----------------------------------------------------------------------------
+
+def stanza_sent_to_tokens(sent):
+	"""Convert a Stanza Sentence to list of token dicts."""
+	tokens = []
+	for tok in sent.words:
+		tokens.append({
+			"id": tok.id,
+			"form": tok.text,
+			"lemma": tok.lemma or "_",
+			"upos": tok.upos or "_",
+			"xpos": tok.xpos or "_",
+			"feats": tok.feats or "_",
+			"head": tok.head,
+			"deprel": tok.deprel or "_",
+			"deps": "_",
+			"misc": "_",
+		})
+	return tokens
+
+
+def segment_and_parse_stanza(text, doc_id, corenlp_client, stanza_nlp, props):
+	"""Segment text with CoreNLP and parse with Stanza."""
+	sentences = []
+	sent_idx = 0
+
+	for text_chunk in chunk_text(text):
+		doc = corenlp_client.annotate(text_chunk, properties=props)
+
+		for sent in doc.sentence:
+			sent_idx += 1
+			sent_text = "".join(t.word + t.after for t in sent.token).strip()
+			sent_text = " ".join(sent_text.split())
+
+			if not sent_text:
+				continue
+
+			stanza_doc = stanza_nlp(sent_text)
+			if stanza_doc.sentences:
+				tokens = stanza_sent_to_tokens(stanza_doc.sentences[0])
+			else:
+				continue
+			sentences.append((f"{doc_id}-{sent_idx}", sent_text, tokens))
+
+	return sentences
+
+
+def process_stanza_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=False, ssplit="two", threads=None):
+	import stanza
+	from stanza.server import CoreNLPClient
+
+	input_dir = Path(input_dir)
+	output_dir = Path(output_dir)
+	output_dir.mkdir(parents=True, exist_ok=True)
+
+	files = select_files(input_dir, output_dir, fmt, limit, overwrite)
+	if not files:
+		print("  No files to process", file=sys.stderr)
+		return
+
+	props = build_corenlp_props(lang, ssplit)
+	print(f"CoreNLP props: {props}", file=sys.stderr)
+
+	print("Loading Stanza model...", file=sys.stderr)
+	nlp = stanza.Pipeline(
+		lang=lang,
+		processors="tokenize,mwt,pos,lemma,depparse",
+		tokenize_no_ssplit=True,
+	)
+	ext = ".json" if fmt == "json" else ".conllu"
+
+	with CoreNLPClient(
+		annotators=["tokenize", "ssplit"],
+		properties=props,
+		threads=threads or 5,
+		be_quiet=True
+	) as client:
+		for filepath in files:
+			print(f"  {filepath.name}", file=sys.stderr)
+			text = filepath.read_text(encoding="utf-8")
+			sentences = segment_and_parse_stanza(text, filepath.stem, client, nlp, props)
+
+			out_path = output_dir / (filepath.stem + ext)
+			write_output(out_path, filepath.stem, sentences, fmt)
+
+
+# -----------------------------------------------------------------------------
 # CoreNLP backend
 # -----------------------------------------------------------------------------
 
@@ -718,6 +807,7 @@ def main():
 		epilog="""
 Backends:
   stanza	  Stanza tokenization + parsing (baseline)
+  stanza+corenlp  CoreNLP segmentation + Stanza parsing
   corenlp	 CoreNLP for everything (requires CORENLP_HOME)
   spacy	   CoreNLP segmentation + spaCy parsing
   spacy+llm   CoreNLP segmentation + spaCy parsing + LLM corrections
@@ -739,7 +829,7 @@ Examples:
 	ap.add_argument("output_dir", help="Output directory for annotations")
 	ap.add_argument("--lang", "-l", choices=["fr", "en"], required=True)
 	ap.add_argument("--format", "-f", choices=["json", "conllu"], default="conllu")
-	ap.add_argument("--backend", "-b", choices=["stanza", "corenlp", "spacy", "spacy+llm"], default="spacy")
+	ap.add_argument("--backend", "-b", choices=["stanza", "stanza+corenlp", "corenlp", "spacy", "spacy+llm"], default="spacy")
 	ap.add_argument("--model", "-m", default=None, help="LLM model (claude-* or gpt-*)")
 	ap.add_argument("--limit", "-n", type=int, help="Process only N documents")
 	ap.add_argument("--overwrite", action="store_true", help="Overwrite existing outputs")
@@ -755,7 +845,7 @@ Examples:
 	args = ap.parse_args()
 	
 	# Validation
-	if args.backend in ("corenlp", "spacy", "spacy+llm"):
+	if args.backend in ("corenlp", "stanza+corenlp", "spacy", "spacy+llm"):
 		if not os.environ.get("CORENLP_HOME"):
 			sys.exit("Error: CORENLP_HOME not set")
 	
@@ -772,7 +862,7 @@ Examples:
 	print(f"Language: {args.lang}", file=sys.stderr)
 	print(f"Input: {args.input_dir}", file=sys.stderr)
 	print(f"Output: {args.output_dir}", file=sys.stderr)
-	if args.backend in ("spacy", "spacy+llm", "corenlp"):
+	if args.backend in ("stanza+corenlp", "spacy", "spacy+llm", "corenlp"):
 		print(f"Sentence split: newline={args.ssplit}, threads={args.threads}", file=sys.stderr)
 	if args.backend == "spacy+llm":
 		print(f"LLM: {args.model}, mode={args.mode}", file=sys.stderr)
@@ -784,6 +874,10 @@ Examples:
 	if args.backend == "stanza":
 		process_stanza(
 			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
+		)
+	elif args.backend == "stanza+corenlp":
+		process_stanza_corenlp(
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite, args.ssplit, args.threads
 		)
 	elif args.backend == "corenlp":
 		process_corenlp(
