@@ -40,7 +40,7 @@ HOMOGRAPH LEMMAS:
 - "cela" lemmatized as "celer" → correct to "cela" (PRON)
 
 CONSECUTIVE "QUE":
-After intensity markers (si, tel, tant, tellement, assez, trop), "que" introducing a result clause is SCONJ, not PRON. Do not change "que" when it is a genuine relative pronoun with a nominal antecedent.
+After intensity markers (si, tel, tant, tellement, assez, trop), "que" introducing a result clause is SCONJ, not PRON. But do NOT change "que" when it is a genuine relative pronoun with a nominal antecedent.
 
 SUBJUNCTIVE MOOD:
 - Circumflexed forms (fût, eût, allât, pût, etc.) are subjunctive imperfect: Mood=Sub, not Mood=Ind.
