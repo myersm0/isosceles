@@ -100,18 +100,50 @@ The `annotate.py` script provides tokenization, POS tagging, lemmatization, and 
 
 | Backend | Segmentation | Parsing | Quality | Use case |
 |---------|--------------|---------|---------|----------|
-| `stanza` | Stanza | Stanza | Baseline | Legacy compatibility |
-| `corenlp` | CoreNLP | CoreNLP | Poor | Not recommended |
-| `spacy` | CoreNLP | spaCy | Good | ELTeC, large corpora |
-| `spacy+llm` | CoreNLP | spaCy + Claude corrections | Best | Maupassant, Poe-Baudelaire |
+| `stanza+corenlp` | CoreNLP | Stanza (GSD) | Best baseline | Recommended for French |
+| `spacy` | CoreNLP | spaCy | Good | ELTeC, English |
 
 **Recommended approach:**
-- French: `spacy+llm` is necessary for high quality annotation
+- French: `stanza+corenlp` for initial parse, then `batch_correct.py` for LLM surface corrections
 - English: `spacy` alone is sufficient
 
-The `spacy` backend uses CoreNLP for sentence segmentation (more reliable for literary text than Stanza or spaCy alone) and spaCy transformer models (`fr_dep_news_trf`, `en_core_web_trf`) for parsing.
+Stanza is pinned to `package='gsd'` (pure GSD model, not the default combined model). The combined model mixes spoken-corpus conventions and bleeds deprel subtypes from other treebanks. See `docs/ud_vs_spacy_conventions.md` for details.
 
-The `spacy+llm` backend adds a correction pass using Claude Sonnet, which fixes many errors in lemmatization, dependency relations, and tree validity.
+### LLM Surface Corrections
+
+The LLM correction pass fixes surface fields only (lemma, UPOS, feats) — not dependency structure (HEAD, deprel). The prompt (`prompt_fr.txt`) targets Stanza GSD's specific weaknesses with literary past tenses:
+
+- **Passé simple disambiguation** — forms like `vit`, `crus`, `fis` misanalyzed as present tense
+- **Fabricated infinitives** — `torder→tordre`, `revoyer→revoir`, etc.
+- **Compound literary tenses** — passé antérieur, pluperfect subjunctive
+- **Homograph lemmas** — `puis` (pouvoir→puis), `sous` (sou→sous)
+
+The code includes a safeguard that rejects all pronoun lemma changes because the Stanza with GSD handles these reliably already.
+
+Batch processing is recommended for cost, as it's 50% cheaper + prompt caching. This is the annotation workflow:
+```bash
+# 1. First pass with with Stanza (GSD) with CoreNLP segmentation
+python scripts/annotate.py \
+    data/maupassant/fr/txt \
+    data/maupassant/fr/conllu/stanza \
+    --language=fr \
+    --backend=stanza+corenlp \
+    --ssplit=always
+
+# 2. Prepare batch requests
+for f in data/maupassant/fr/stanza/*.conllu; do
+    python scripts/batch_correct.py prepare "$f" -p prompt_fr.txt -o work/maupassant/
+done
+
+# 3. Submit (seeds 1h cache, then submits batch)
+for f in work/maupassant/*.jsonl; do
+    python scripts/batch_correct.py submit "$f"
+done
+
+# 4. Poll and apply corrections
+python scripts/batch_correct.py resume work/maupassant/*.state.json
+```
+
 
 ### Usage
 ```bash
@@ -151,6 +183,9 @@ en_file  fr_file  en_title  fr_title  fr_volume  en_edition  en_words  fr_words
 For Poe, the `en_edition` column indicates whether the English text is from the 1845 edition (Wiley & Putnam), the 1850 edition (Lowell & Griswold), or both.
 
 ## Notes on the texts
+### ELTeC
+- **Footnote markers**: Manually removed footnote marker artifacts such as "[3]" that were present in about 15 ELTeC novels, and associated linebreaks that were induced by them, if any.
+
 ### Poe
 
 - **Footnotes**: Manually removed footnotes, to focus on body text.
