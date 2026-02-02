@@ -461,7 +461,10 @@ def process_stanza(input_dir, output_dir, lang, fmt, limit=None, overwrite=False
 		return
 	
 	print("Loading Stanza model...", file=sys.stderr)
-	nlp = stanza.Pipeline(lang=lang, processors="tokenize,mwt,pos,lemma,depparse")
+	if lang == "fr":
+		nlp = stanza.Pipeline(lang=lang, package="gsd", processors="tokenize,mwt,pos,lemma,depparse")
+	else:
+		nlp = stanza.Pipeline(lang=lang, processors="tokenize,mwt,pos,lemma,depparse")
 	ext = ".json" if fmt == "json" else ".conllu"
 	
 	for filepath in files:
@@ -557,11 +560,19 @@ def process_stanza_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwri
 	print(f"CoreNLP props: {props}", file=sys.stderr)
 
 	print("Loading Stanza model...", file=sys.stderr)
-	nlp = stanza.Pipeline(
-		lang=lang,
-		processors="tokenize,mwt,pos,lemma,depparse",
-		tokenize_no_ssplit=True,
-	)
+	if lang == "fr":
+		nlp = stanza.Pipeline(
+			lang=lang,
+			package="gsd",
+			processors="tokenize,mwt,pos,lemma,depparse",
+			tokenize_no_ssplit=True,
+		)
+	else:
+		nlp = stanza.Pipeline(
+			lang=lang,
+			processors="tokenize,mwt,pos,lemma,depparse",
+			tokenize_no_ssplit=True,
+		)
 	ext = ".json" if fmt == "json" else ".conllu"
 
 	with CoreNLPClient(
