@@ -460,7 +460,7 @@ def process_stanza(input_dir, output_dir, lang, fmt, limit=None, overwrite=False
 		return
 	
 	print("Loading Stanza model...", file=sys.stderr)
-	nlp = stanza.Pipeline(lang=lang, processors="tokenize,pos,lemma,depparse")
+	nlp = stanza.Pipeline(lang=lang, processors="tokenize,mwt,pos,lemma,depparse")
 	ext = ".json" if fmt == "json" else ".conllu"
 	
 	for filepath in files:
