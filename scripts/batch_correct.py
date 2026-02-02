@@ -108,6 +108,9 @@ def format_tokens_for_llm(tokens):
 	return "\n".join(lines)
 
 
+_consecutive_triggers = re.compile(r"^(?:si|tant|tellement|telle?s?)$", re.IGNORECASE)
+
+
 def parse_corrections_json(response_text):
 	match = re.search(r"\{[\s\S]*\}", response_text)
 	if match:
@@ -118,11 +121,21 @@ def parse_corrections_json(response_text):
 	return []
 
 
+def apply_deterministic_fixes(tokens):
+	n = 0
+	for t in tokens:
+		if t["form"].lower() in ("ne", "n'") and t["upos"] != "ADV":
+			t["upos"] = "ADV"
+			n += 1
+	return n
+
+
 def apply_corrections(tokens, corrections):
 	tokens = copy.deepcopy(tokens)
 	token_map = {t["id"]: t for t in tokens}
 	safe_fields = {"lemma", "upos", "xpos", "feats"}
 	n_applied = 0
+	n_rejected_pron = 0
 
 	for c in corrections:
 		field = c.get("field")
@@ -135,10 +148,19 @@ def apply_corrections(tokens, corrections):
 			continue
 		if tok_id not in token_map:
 			continue
-		token_map[tok_id][field] = value
+
+		tok = token_map[tok_id]
+
+		# Reject lemma changes for pronouns — GSD conventions are correct
+		if field == "lemma" and tok["upos"] == "PRON":
+			n_rejected_pron += 1
+			continue
+
+		tok[field] = value
 		n_applied += 1
 
-	return tokens, n_applied
+	n_applied += apply_deterministic_fixes(tokens)
+	return tokens, n_applied, n_rejected_pron
 
 
 # --- Commands ---
@@ -164,6 +186,7 @@ def cmd_prepare(args):
 			"params": {
 				"model": args.model,
 				"max_tokens": 1024,
+				"temperature": 0,
 				"system": [
 					{"type": "text", "text": prompt, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
 				],
@@ -292,6 +315,7 @@ def cmd_resume(args):
 			sent_order.append(sent_id)
 
 		total_corrections = 0
+		total_rejected_pron = 0
 		for result in client.messages.batches.results(batch_id):
 			if result.result.type != "succeeded":
 				continue
@@ -305,15 +329,19 @@ def cmd_resume(args):
 
 			if sent_id in sent_map:
 				old = sent_map[sent_id]
-				new_tokens, n = apply_corrections(old[3], corrections)
+				new_tokens, n, n_pron = apply_corrections(old[3], corrections)
 				sent_map[sent_id] = (old[0], old[1], old[2], new_tokens)
 				total_corrections += n
+				total_rejected_pron += n_pron
 
 		corrected = [sent_map[sid] for sid in sent_order]
 		output_path = output_dir / f"{stem}.conllu"
 		write_conllu(corrected, output_path)
 
-		print(f"  ✓   {stem}: {total_corrections} corrections → {output_path}", file=sys.stderr)
+		msg = f"  ✓   {stem}: {total_corrections} corrections → {output_path}"
+		if total_rejected_pron > 0:
+			msg += f" (rejected {total_rejected_pron} PRON lemma changes)"
+		print(msg, file=sys.stderr)
 
 
 def cmd_status(args):
