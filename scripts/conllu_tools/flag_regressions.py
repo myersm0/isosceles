@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
 Flag potential regressions between original and LLM-corrected CoNLL-U files.
+
+Usage:
+  python flag_regressions.py original.conllu corrected.conllu
+  python flag_regressions.py original.conllu corrected.conllu --fix
+  python flag_regressions.py original.conllu corrected.conllu --fix --output fixed.conllu --log fixes.log
 """
 
+import argparse
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 try:
@@ -15,15 +22,16 @@ except ImportError:
 
 @dataclass
 class Flag:
-	severity: str  # "hard" or "soft"
+	severity: str
 	category: str
 	sent_id: str
 	sent_text: str
 	token_id: int
 	form: str
-	original: str
-	corrected: str
 	message: str
+	sentence_index: int = -1
+	orig_token: Optional[dict] = None
+	corr_token: Optional[dict] = None
 
 
 CLITIC_FORMS = frozenset(
@@ -52,24 +60,33 @@ def is_valid_infinitive(lemma: str) -> bool:
 	return lower.endswith("er") or lower.endswith("ir") or lower.endswith("re")
 
 
-def read_conllu_sentences(path: str) -> list[tuple[str, str, list[dict]]]:
-	sentences = []
-	current_block = []
+def format_token_row(tok: dict) -> str:
+	return "\t".join([
+		str(tok["id"]), tok["form"], tok["lemma"], tok["upos"],
+		tok.get("xpos", "_"), tok.get("feats", "_"),
+		str(tok["head"]), tok["deprel"],
+		tok.get("deps", "_"), tok.get("misc", "_"),
+	])
+
+
+def read_conllu_blocks(path: str) -> list[list[str]]:
+	blocks: list[list[str]] = []
+	current: list[str] = []
 	with open(path, encoding="utf-8") as f:
 		for line in f:
 			line = line.rstrip("\n")
-			if line == "" and current_block:
-				sent_id, sent_text, tokens = parse_conllu_block("\n".join(current_block))
-				if tokens:
-					sentences.append((sent_id or "", sent_text or "", tokens))
-				current_block = []
+			if line == "" and current:
+				blocks.append(current)
+				current = []
 			else:
-				current_block.append(line)
-	if current_block:
-		sent_id, sent_text, tokens = parse_conllu_block("\n".join(current_block))
-		if tokens:
-			sentences.append((sent_id or "", sent_text or "", tokens))
-	return sentences
+				current.append(line)
+	if current:
+		blocks.append(current)
+	return blocks
+
+
+def parse_block(lines: list[str]) -> tuple[str, str, list[dict]]:
+	return parse_conllu_block("\n".join(lines))
 
 
 def preceding_forms(tokens: list[dict], index: int, window: int) -> list[str]:
@@ -85,13 +102,12 @@ def flag_regressions(
 
 	if len(original) != len(corrected):
 		flags.append(Flag(
-			"hard", "sentence_count_mismatch", "", "", 0, "",
-			str(len(original)), str(len(corrected)),
-			"sentence count mismatch between files",
+			"hard", "sentence_count_mismatch", "", "",
+			0, "", f"original has {len(original)}, corrected has {len(corrected)} sentences",
 		))
 		return flags
 
-	for (orig_sid, orig_text, orig_tokens), (corr_sid, corr_text, corr_tokens) in zip(original, corrected):
+	for sent_idx, ((orig_sid, orig_text, orig_tokens), (corr_sid, corr_text, corr_tokens)) in enumerate(zip(original, corrected)):
 		sid = corr_sid or orig_sid
 		text = corr_text or orig_text
 		orig_by_id = {t["id"]: t for t in orig_tokens}
@@ -101,8 +117,9 @@ def flag_regressions(
 			if ot is None:
 				flags.append(Flag(
 					"hard", "token_id_mismatch", sid, text,
-					ct["id"], ct["form"], "_", "_",
+					ct["id"], ct["form"],
 					f"token ID {ct['id']} not found in original",
+					sentence_index=sent_idx,
 				))
 				continue
 
@@ -113,75 +130,55 @@ def flag_regressions(
 			changed_feats = ot.get("feats", "_") != ct.get("feats", "_")
 			anything_changed = changed_lemma or changed_upos or changed_feats
 
-			# ── all-token checks (regardless of whether changed) ──
+			def add_flag(severity, category, message):
+				flags.append(Flag(
+					severity, category, sid, text,
+					ct["id"], ct["form"], message,
+					sentence_index=sent_idx,
+					orig_token=ot, corr_token=ct,
+				))
+
+			# ── all-token checks ──
 
 			if ct["upos"] in ("VERB", "AUX") and ct["lemma"] != "_":
 				if not is_valid_infinitive(ct["lemma"]):
-					flags.append(Flag(
-						"hard", "non_infinitive_lemma", sid, text,
-						ct["id"], ct["form"],
-						f"{ot['upos']} {ot['lemma']}", f"{ct['upos']} {ct['lemma']}",
-						f"VERB/AUX lemma '{ct['lemma']}' not a valid infinitive",
-					))
+					add_flag("hard", "non_infinitive_lemma",
+						f"VERB/AUX lemma '{ct['lemma']}' not a valid infinitive")
 
 			if cf.get("VerbForm") == "Part":
 				if ct["lemma"].lower() == ct["form"].lower():
-					flags.append(Flag(
-						"hard", "participle_self_lemma", sid, text,
-						ct["id"], ct["form"],
-						ot["lemma"], ct["lemma"],
-						"participle with lemma == surface form",
-					))
+					add_flag("hard", "participle_self_lemma",
+						"participle with lemma == surface form")
 
-			# circumflex checks apply to final output regardless of change
 			form_lower = ct["form"].lower()
 			if form_lower in ("fût", "eût") and ct["upos"] in ("AUX", "VERB"):
 				if cf.get("Mood") != "Sub" or cf.get("Tense") != "Imp":
-					flags.append(Flag(
-						"hard", "circumflex_mood", sid, text,
-						ct["id"], ct["form"],
-						ot.get("feats", "_"), ct.get("feats", "_"),
-						"circumflexed form must be Mood=Sub|Tense=Imp",
-					))
+					add_flag("hard", "circumflex_mood",
+						"circumflexed form must be Mood=Sub|Tense=Imp")
 
 			if form_lower in ("fut", "eut") and ct["upos"] in ("AUX", "VERB"):
 				if cf.get("Mood") == "Sub":
-					flags.append(Flag(
-						"hard", "non_circumflex_subjunctive", sid, text,
-						ct["id"], ct["form"],
-						ot.get("feats", "_"), ct.get("feats", "_"),
-						"non-circumflexed form should not be Mood=Sub",
-					))
+					add_flag("hard", "non_circumflex_subjunctive",
+						"non-circumflexed form should not be Mood=Sub")
 
 			if not anything_changed:
 				continue
 
 			# ── changed-token checks ──
 
-			# s' SCONJ→PRON before subject pronoun
 			if form_lower in ("s'", "s\u2019"):
 				if ot["upos"] == "SCONJ" and ct["upos"] == "PRON":
 					if idx + 1 < len(corr_tokens):
 						next_form = corr_tokens[idx + 1]["form"].lower()
 						if next_form in SUBJECT_PRONOUNS_AFTER_SI:
-							flags.append(Flag(
-								"hard", "si_to_se_regression", sid, text,
-								ct["id"], ct["form"],
-								"SCONJ si", "PRON se",
-								f"s' before '{next_form}': likely conditional si",
-							))
+							add_flag("hard", "si_to_se_regression",
+								f"s' before '{next_form}': likely conditional si, not reflexive se")
 
-			# clitic PRON→DET
 			if form_lower in CLITIC_FORMS:
 				if ot["upos"] == "PRON" and ct["upos"] == "DET":
-					flags.append(Flag(
-						"hard", "clitic_pron_to_det", sid, text,
-						ct["id"], ct["form"],
-						"PRON", "DET",
-						"clitic pronoun changed to DET",
-					))
+					add_flag("hard", "clitic_pron_to_det",
+						"clitic pronoun changed to DET")
 
-			# AUX tense changed when followed by participle
 			if ot["upos"] == "AUX" and ct["upos"] in ("AUX", "VERB"):
 				orig_tense = of.get("Tense", "")
 				corr_tense = cf.get("Tense", "")
@@ -192,91 +189,197 @@ def flag_regressions(
 							break
 						fj = parse_feats(corr_tokens[j].get("feats", "_"))
 						if fj.get("VerbForm") == "Part":
-							flags.append(Flag(
-								"soft", "aux_tense_in_compound", sid, text,
-								ct["id"], ct["form"],
-								f"Tense={orig_tense}", f"Tense={corr_tense}",
-								"auxiliary tense changed in compound tense",
-							))
+							add_flag("soft", "aux_tense_in_compound",
+								f"AUX tense {orig_tense}→{corr_tense} before participle")
 							break
 
-			# partie NOUN→VERB under faire (faire partie de)
 			if form_lower in ("partie", "part"):
 				if ot["upos"] == "NOUN" and ct["upos"] == "VERB":
 					head_tok = orig_by_id.get(ot["head"])
 					if head_tok and head_tok["lemma"].lower() in ("faire", "fait"):
-						flags.append(Flag(
-							"hard", "faire_partie_lvc", sid, text,
-							ct["id"], ct["form"],
-							f"NOUN {ot['lemma']}", f"VERB {ct['lemma']}",
-							"partie in 'faire partie de' should stay NOUN",
-						))
+						add_flag("hard", "faire_partie_lvc",
+							"partie in 'faire partie de' should stay NOUN")
 
-			# que/qu' changed to SCONJ
 			if form_lower in ("que", "qu'", "qu\u2019"):
 				if ot["upos"] != "SCONJ" and ct["upos"] == "SCONJ":
 					prec = preceding_forms(corr_tokens, idx, 3)
 					if "est" in prec and any(f in prec for f in ("-ce", "ce")):
-						flags.append(Flag(
-							"hard", "interrogative_que_to_sconj", sid, text,
-							ct["id"], ct["form"],
-							ot["upos"], "SCONJ",
-							"que in qu'est-ce que should not be SCONJ",
-						))
-
+						add_flag("hard", "interrogative_que_to_sconj",
+							"que in qu'est-ce que should not be SCONJ")
 					if ot["upos"] == "PRON":
 						wider = set(preceding_forms(corr_tokens, idx, 5))
 						if not wider & INTENSITY_MARKERS:
-							flags.append(Flag(
-								"soft", "que_to_sconj_no_trigger", sid, text,
-								ct["id"], ct["form"],
-								"PRON", "SCONJ",
-								"que PRON→SCONJ without nearby intensity marker",
-							))
+							add_flag("soft", "que_to_sconj_no_trigger",
+								"que PRON→SCONJ without nearby intensity marker")
 
-	return flags
+	return deduplicate_flags(flags)
+
+
+def deduplicate_flags(flags: list[Flag]) -> list[Flag]:
+	seen: dict[tuple[int, int], Flag] = {}
+	for flag in flags:
+		key = (flag.sentence_index, flag.token_id)
+		if key not in seen:
+			seen[key] = flag
+		else:
+			existing = seen[key]
+			if flag.severity == "hard" and existing.severity == "soft":
+				flag.message = f"{flag.message}; {existing.message}"
+				seen[key] = flag
+			else:
+				existing.message = f"{existing.message}; {flag.message}"
+	return list(seen.values())
 
 
 def format_flag(flag: Flag) -> str:
-	severity_label = "HARD" if flag.severity == "hard" else "SOFT"
-	lines = [f"[{severity_label}] {flag.category}"]
-	if flag.sent_id:
-		preview = flag.sent_text[:80] + "…" if len(flag.sent_text) > 80 else flag.sent_text
-		lines.append(f"  Sentence {flag.sent_id}: {preview}")
-	lines.append(f"  Token {flag.token_id} \"{flag.form}\": {flag.message}")
-	if flag.original and flag.corrected:
-		lines.append(f"  {flag.original} → {flag.corrected}")
+	label = "HARD" if flag.severity == "hard" else "SOFT"
+	lines = [f"[{label}] {flag.category} — {flag.message}"]
+	lines.append(f"  Sentence {flag.sent_id}: {flag.sent_text}")
+	lines.append(f"  Token {flag.token_id} \"{flag.form}\"")
+	if flag.orig_token:
+		lines.append(f"  orig: {format_token_row(flag.orig_token)}")
+	if flag.corr_token:
+		lines.append(f"  corr: {format_token_row(flag.corr_token)}")
 	return "\n".join(lines)
 
 
-def main():
-	if len(sys.argv) < 3:
-		print("usage: python flag_regressions.py <original.conllu> <corrected.conllu>", file=sys.stderr)
-		sys.exit(1)
+def revert_token_in_block(block_lines: list[str], token_id: int, orig_token: dict):
+	target = str(token_id)
+	for i, line in enumerate(block_lines):
+		if line.startswith("#") or not line.strip():
+			continue
+		parts = line.split("\t")
+		if len(parts) >= 6 and parts[0] == target:
+			parts[2] = orig_token["lemma"]
+			parts[3] = orig_token["upos"]
+			parts[5] = orig_token.get("feats", "_")
+			block_lines[i] = "\t".join(parts)
+			return
 
-	original = read_conllu_sentences(sys.argv[1])
-	corrected = read_conllu_sentences(sys.argv[2])
-	flags = flag_regressions(original, corrected)
+
+def write_conllu_file(path: str, blocks: list[list[str]]):
+	with open(path, "w", encoding="utf-8") as f:
+		for block in blocks:
+			for line in block:
+				f.write(line + "\n")
+			f.write("\n")
+
+
+def interactive_review(
+	flags: list[Flag],
+	corr_blocks: list[list[str]],
+	output_path: str,
+	log_path: str,
+) -> int:
+	reverted = 0
+	log_entries: list[str] = []
+	timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+	for i, flag in enumerate(flags):
+		print(f"\n{'='*72}")
+		print(f"  Flag {i + 1}/{len(flags)}")
+		print(f"{'='*72}")
+		print(format_flag(flag))
+
+		can_revert = (
+			flag.orig_token is not None
+			and flag.corr_token is not None
+			and flag.sentence_index >= 0
+			and (
+				flag.orig_token["lemma"] != flag.corr_token["lemma"]
+				or flag.orig_token["upos"] != flag.corr_token["upos"]
+				or flag.orig_token.get("feats", "_") != flag.corr_token.get("feats", "_")
+			)
+		)
+
+		if can_revert:
+			try:
+				response = input("\n  [a]ccept revert / [Enter] skip > ").strip().lower()
+			except (EOFError, KeyboardInterrupt):
+				print("\nAborted.")
+				break
+			if response == "a":
+				revert_token_in_block(
+					corr_blocks[flag.sentence_index],
+					flag.token_id, flag.orig_token,
+				)
+				reverted += 1
+				entry = (
+					f"{timestamp} REVERTED [{flag.category}] "
+					f"Sentence {flag.sent_id} Token {flag.token_id} \"{flag.form}\": "
+					f"{flag.corr_token['upos']} {flag.corr_token['lemma']} "
+					f"→ {flag.orig_token['upos']} {flag.orig_token['lemma']}"
+				)
+				log_entries.append(entry)
+				print("  ✓ reverted")
+		else:
+			try:
+				input("\n  (no revert available) [Enter] to continue > ")
+			except (EOFError, KeyboardInterrupt):
+				print("\nAborted.")
+				break
+
+	if reverted > 0:
+		write_conllu_file(output_path, corr_blocks)
+		print(f"\nWrote {output_path} with {reverted} reversion(s)")
+
+	if log_entries:
+		with open(log_path, "a", encoding="utf-8") as f:
+			for entry in log_entries:
+				f.write(entry + "\n")
+		print(f"Appended {len(log_entries)} entries to {log_path}")
+
+	return reverted
+
+
+def main():
+	parser = argparse.ArgumentParser(
+		description="Flag potential regressions in LLM-corrected CoNLL-U files."
+	)
+	parser.add_argument("original", help="Original (pre-correction) CoNLL-U file")
+	parser.add_argument("corrected", help="LLM-corrected CoNLL-U file")
+	parser.add_argument("--fix", action="store_true",
+		help="Interactive mode: review flags and optionally revert regressions")
+	parser.add_argument("--output",
+		help="Output path for fixed file (default: overwrite corrected)")
+	parser.add_argument("--log", default="regression_fixes.log",
+		help="Log file for accepted reverts (default: regression_fixes.log)")
+	args = parser.parse_args()
+
+	orig_blocks = read_conllu_blocks(args.original)
+	corr_blocks = read_conllu_blocks(args.corrected)
+
+	orig_sentences = [parse_block(b) for b in orig_blocks]
+	corr_sentences = [parse_block(b) for b in corr_blocks]
+
+	flags = flag_regressions(orig_sentences, corr_sentences)
 
 	hard_flags = [f for f in flags if f.severity == "hard"]
 	soft_flags = [f for f in flags if f.severity == "soft"]
 
-	if hard_flags:
-		print("=== HARD FLAGS (likely regressions) ===\n")
-		for f in hard_flags:
-			print(format_flag(f))
-			print()
-
-	if soft_flags:
-		print("=== SOFT FLAGS (review recommended) ===\n")
-		for f in soft_flags:
-			print(format_flag(f))
-			print()
-
-	total_tokens = sum(len(toks) for _, _, toks in corrected)
-	print("---")
-	print(f"{len(original)} sentences, {total_tokens} tokens")
-	print(f"{len(hard_flags)} hard flags, {len(soft_flags)} soft flags")
+	if not args.fix:
+		if hard_flags:
+			print("=== HARD FLAGS (likely regressions) ===\n")
+			for f in hard_flags:
+				print(format_flag(f))
+				print()
+		if soft_flags:
+			print("=== SOFT FLAGS (review recommended) ===\n")
+			for f in soft_flags:
+				print(format_flag(f))
+				print()
+		total_tokens = sum(len(toks) for _, _, toks in corr_sentences)
+		print("---")
+		print(f"{len(orig_sentences)} sentences, {total_tokens} tokens")
+		print(f"{len(hard_flags)} hard flags, {len(soft_flags)} soft flags")
+	else:
+		if not flags:
+			print("No flags to review.")
+			return
+		output_path = args.output or args.corrected
+		n = interactive_review(flags, corr_blocks, output_path, args.log)
+		total = len(flags)
+		print(f"\n{n} reverted out of {total} flags reviewed")
 
 
 if __name__ == "__main__":
