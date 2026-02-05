@@ -50,14 +50,11 @@ The `eltec` folder is omitted from this repository, due to its size, but you can
 ## Setup
 ```bash
 # clone the repository:
-git clone https://github.com/YOUR_USERNAME/corpus-isosceles.git
-cd corpus-isosceles
+git clone https://github.com/myersm0/isosceles.git
+cd isosceles
 
 # install Python dependencies:
 pip install -r requirements.txt
-
-# download Stanza models (if running annotation):
-python -c "import stanza; stanza.download('fr'); stanza.download('en')"
 ```
 
 ## Scripts
@@ -109,7 +106,9 @@ The `annotate.py` script provides tokenization, POS tagging, lemmatization, and 
 
 Stanza is pinned to `package='gsd'` (pure GSD model, not the default combined model). The combined model mixes spoken-corpus conventions and bleeds deprel subtypes from other treebanks. See `docs/ud_vs_spacy_conventions.md` for details.
 
-### LLM Surface Corrections
+**Note**: I do not recommend relying on the dependency structure fields in the annotations for French texts. I was unable to get acceptable parses of French dependency structure with any model, even after painstaking experimentation with routines for LLM-assisted correction. In the end I had to consider it out of scope and out of budget to continue pursuing that.
+
+### LLM surface corrections
 
 The LLM correction pass fixes surface fields only (lemma, UPOS, feats) — not dependency structure (HEAD, deprel). The prompt (`prompt_fr.txt`) targets Stanza GSD's specific weaknesses with literary past tenses:
 
