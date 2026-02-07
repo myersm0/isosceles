@@ -55,10 +55,13 @@ cd isosceles
 
 # install Python dependencies:
 pip install -r requirements.txt
+
+# download Stanza models (only needed for annotation with stanza+corenlp backend):
+python -c "import stanza; stanza.download('fr'); stanza.download('en')"
 ```
 
 ## Scripts
-
+### Corpus preparation
 ```bash
 # ELTeC reference corpora
 python scripts/prepare/eltec.py download fra
@@ -84,10 +87,30 @@ python scripts/prepare/poe.py download 1850
 # Baudelaire-Poe French (from WikiSource)
 python scripts/prepare/baudelaire.py list
 python scripts/prepare/baudelaire.py download
+```
 
-# build parallel index for Maupassant:
-python scripts/prepare/parallel_index.py check
-python scripts/prepare/parallel_index.py build
+### Postprocessing
+To match up the Maupassant stories between their French and English versions, I first used a fuzzy matching technique that assesses proper noun overlap between pairs of stories in French and English, to generate a preliminary list of candidate mappings between them:
+```
+python scripts/postprocess/match.py data/maupassant/fr/conllu data/maupassant/en/conllu > matches.tsv
+```
+
+I then used two techniques to confirm accuracy of the matches: comparing word counts, and skimming the titles of the matched pairs to ensure the matches are plausible. This worked well except in the case of about 20 unmatched stories that I had to match myself manually.
+
+The resulting match.tsv was then used to build the parallel index for Maupassant:
+```
+python scripts/postprocess/parallel_index.py check
+python scripts/postprocess/parallel_index.py build
+```
+
+For creating the parallel index for the Baudelaire translations of Poe, there were few enough stories that I matched all of them manually myself.
+
+With the parallel indices defining the mappings between French and English story pairs, we can then run sentence alignment with [LaBSE](https://arxiv.org/pdf/2301.12140):
+```
+python scripts/postprocess/align.py data/maupassant/fr/conllu/story.conllu \
+    data/maupassant/en/conllu/story.conllu \
+    --method labse \
+    -o alignment.tsv
 ```
 
 ## Linguistic annotation
@@ -119,19 +142,21 @@ The LLM correction pass fixes surface fields only (lemma, UPOS, feats) — not d
 
 The code includes a safeguard that rejects all pronoun lemma changes because the Stanza with GSD handles these reliably already.
 
-Batch processing is recommended for cost, as it's 50% cheaper + prompt caching. This is the annotation workflow:
+Batch processing is recommended for cost reduction, as it's 50% cheaper. This is the annotation workflow:
+
 ```bash
-# 1. First pass with with Stanza (GSD) with CoreNLP segmentation
+# 1. First pass with Stanza (GSD) with CoreNLP segmentation
 python scripts/annotate/annotate.py \
     data/maupassant/fr/txt \
-    data/maupassant/fr/conllu/stanza \
-    --language=fr \
-    --backend=stanza+corenlp \
-    --ssplit=always
+    data/maupassant/fr/conllu \
+    --lang fr \
+    --backend stanza+corenlp
 
 # 2. Prepare batch requests
-for f in data/maupassant/fr/stanza/*.conllu; do
-    python scripts/annotate/batch_correct.py prepare "$f" -p prompt_fr.txt -o work/maupassant/
+for f in data/maupassant/fr/conllu/*.conllu; do
+    python scripts/annotate/batch_correct.py prepare "$f" \
+        -p scripts/annotate/prompt_fr.txt \
+        -o work/maupassant/
 done
 
 # 3. Submit (seeds 1h cache, then submits batch)
@@ -142,7 +167,6 @@ done
 # 4. Poll and apply corrections
 python scripts/annotate/batch_correct.py resume work/maupassant/*.state.json
 ```
-
 
 ### Usage
 ```bash
@@ -178,6 +202,24 @@ python scripts/annotate/annotate.py \
     --lang fr \
     --backend stanza+corenlp
 ```
+
+### Annotation utilities
+The `conllu_tools/` module provides utilities for inspecting and validating CoNLL-U files:
+
+```bash
+# diff two CoNLL-U files (e.g., before/after LLM correction)
+python scripts/annotate/conllu_tools/diff.py original.conllu corrected.conllu
+
+# flag potential regressions from LLM corrections
+python scripts/annotate/conllu_tools/flag_regressions.py original.conllu corrected.conllu
+
+# interactive review and revert of flagged regressions
+python scripts/annotate/conllu_tools/flag_regressions.py original.conllu corrected.conllu \
+    --fix \
+    --output fixed.conllu
+```
+
+The `flag_regressions.py` script detects known-bad correction patterns such as clitic pronouns reclassified as determiners, broken light verb constructions (`faire partie`), and incorrect mood/tense on circumflexed verb forms.x
 
 ## Index files
 Each author directory has an `index.tsv` for parallel text alignment:
