@@ -569,8 +569,15 @@ def process_stanza_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwri
 		)
 	else:
 		nlp = stanza.Pipeline(
-			lang=lang,
-			processors="tokenize,mwt,pos,lemma,depparse",
+			lang="en",
+			processors={
+				"tokenize": "gum",
+				"mwt": "gum",
+				"pos": "gum",
+				"lemma": "gum",
+				"depparse": "default",
+			},
+			package=None,
 			tokenize_no_ssplit=True,
 		)
 	ext = ".json" if fmt == "json" else ".conllu"
