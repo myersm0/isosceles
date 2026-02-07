@@ -61,37 +61,37 @@ pip install -r requirements.txt
 
 ```bash
 # ELTeC reference corpora
-python scripts/eltec.py download fra
-python scripts/eltec.py download eng
-python scripts/eltec.py extract fra
-python scripts/eltec.py extract eng
+python scripts/prepare/eltec.py download fra
+python scripts/prepare/eltec.py download eng
+python scripts/prepare/eltec.py extract fra
+python scripts/prepare/eltec.py extract eng
 
 # Maupassant French (from maupassant.free.fr)
-python scripts/maupassant.py list
-python scripts/maupassant.py download
+python scripts/prepare/maupassant.py list
+python scripts/prepare/maupassant.py download
 
 # Maupassant English (from Project Gutenberg)
-python scripts/maupassant_en.py download
-python scripts/maupassant_en.py toc
-python scripts/maupassant_en.py list
-python scripts/maupassant_en.py segment
+python scripts/prepare/maupassant_en.py download
+python scripts/prepare/maupassant_en.py toc
+python scripts/prepare/maupassant_en.py list
+python scripts/prepare/maupassant_en.py segment
 
 # Poe English (from WikiSource)
-python scripts/poe.py list
-python scripts/poe.py download 1845
-python scripts/poe.py download 1850
+python scripts/prepare/poe.py list
+python scripts/prepare/poe.py download 1845
+python scripts/prepare/poe.py download 1850
 
 # Baudelaire-Poe French (from WikiSource)
-python scripts/baudelaire.py list
-python scripts/baudelaire.py download
+python scripts/prepare/baudelaire.py list
+python scripts/prepare/baudelaire.py download
 
 # build parallel index for Maupassant:
-python scripts/parallel_index.py check
-python scripts/parallel_index.py build
+python scripts/prepare/parallel_index.py check
+python scripts/prepare/parallel_index.py build
 ```
 
 ## Linguistic annotation
-The `annotate.py` script provides tokenization, POS tagging, lemmatization, and dependency parsing with multiple backend options.
+The [annotate.py](scripts/annotate/annotate.py) script provides tokenization, POS tagging, lemmatization, and dependency parsing with multiple backend options.
 
 ### Backends
 
@@ -122,7 +122,7 @@ The code includes a safeguard that rejects all pronoun lemma changes because the
 Batch processing is recommended for cost, as it's 50% cheaper + prompt caching. This is the annotation workflow:
 ```bash
 # 1. First pass with with Stanza (GSD) with CoreNLP segmentation
-python scripts/annotate.py \
+python scripts/annotate/annotate.py \
     data/maupassant/fr/txt \
     data/maupassant/fr/conllu/stanza \
     --language=fr \
@@ -131,16 +131,16 @@ python scripts/annotate.py \
 
 # 2. Prepare batch requests
 for f in data/maupassant/fr/stanza/*.conllu; do
-    python scripts/batch_correct.py prepare "$f" -p prompt_fr.txt -o work/maupassant/
+    python scripts/annotate/batch_correct.py prepare "$f" -p prompt_fr.txt -o work/maupassant/
 done
 
 # 3. Submit (seeds 1h cache, then submits batch)
 for f in work/maupassant/*.jsonl; do
-    python scripts/batch_correct.py submit "$f"
+    python scripts/annotate/batch_correct.py submit "$f"
 done
 
 # 4. Poll and apply corrections
-python scripts/batch_correct.py resume work/maupassant/*.state.json
+python scripts/annotate/batch_correct.py resume work/maupassant/*.state.json
 ```
 
 
@@ -148,22 +148,35 @@ python scripts/batch_correct.py resume work/maupassant/*.state.json
 ```bash
 # Set environment variables
 export CORENLP_HOME=/path/to/stanford-corenlp-4.5.x
-export ANTHROPIC_API_KEY=sk-...  # only needed if using spacy+llm
+export ANTHROPIC_API_KEY=sk-...  # only needed if using spacy+llm backend
 
-# Maupassant French — both versions for different analyses
-python scripts/annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
-python scripts/annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu_claude -l fr -b spacy+claude
+# Maupassant French
+python scripts/annotate/annotate.py \
+    data/maupassant/fr/txt \
+    data/maupassant/fr/conllu \
+    --lang fr \
+    --backend stanza+corenlp
 
 # Maupassant English
-python scripts/annotate.py data/maupassant/en/txt data/maupassant/en/conllu -l en -b spacy
+python scripts/annotate/annotate.py \
+    data/maupassant/en/txt \
+    data/maupassant/en/conllu \
+    --lang en \
+    --backend spacy
 
 # Poe-Baudelaire French
-python scripts/annotate.py data/poe/fr/histoires_extraordinaires/txt data/poe/fr/histoires_extraordinaires/conllu -l fr -b spacy
-python scripts/annotate.py data/poe/fr/histoires_extraordinaires/txt data/poe/fr/histoires_extraordinaires/conllu_claude -l fr -b spacy+claude
+python scripts/annotate/annotate.py \
+    data/poe/fr/histoires_extraordinaires/txt \
+    data/poe/fr/histoires_extraordinaires/conllu \
+    --lang fr \
+    --backend stanza+corenlp
 
-# ELTeC reference corpora (spacy only, due to size)
-python scripts/annotate.py data/eltec/fr/txt data/eltec/fr/conllu -l fr -b spacy
-python scripts/annotate.py data/eltec/en/txt data/eltec/en/conllu -l en -b spacy
+# ELTeC reference corpora
+python scripts/annotate/annotate.py \
+    data/eltec/fr/txt \
+    data/eltec/fr/conllu \
+    --lang fr \
+    --backend stanza+corenlp
 ```
 
 ## Index files
