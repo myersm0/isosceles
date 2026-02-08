@@ -53,7 +53,7 @@ def load_sentences(path):
 		raise ValueError(f"Unknown file format: {path.suffix} (expected .conllu or .json)")
 
 
-def dp_align(scores, gap_penalty=0.5, merge_penalty=0.1):
+def dp_align(scores, gap_penalty=0.3, merge_penalty=0.2, band_fraction=0.1):
 	n, m = scores.shape
 	dp = np.full((n + 1, m + 1), np.inf)
 	back = np.zeros((n + 1, m + 1, 2), dtype=int)
@@ -63,6 +63,9 @@ def dp_align(scores, gap_penalty=0.5, merge_penalty=0.1):
 		for j in range(m + 1):
 			if i == 0 and j == 0:
 				continue
+			if band_fraction is not None and n > 0 and m > 0:
+				if abs(i / n - j / m) > band_fraction:
+					continue
 			candidates = []
 			if i >= 1 and j >= 1:
 				candidates.append((dp[i-1, j-1] + scores[i-1, j-1], i-1, j-1))
@@ -157,6 +160,10 @@ def main():
 	ap.add_argument("--en-dir", required=True)
 	ap.add_argument("--index", required=True, help="TSV with fr_file, en_file columns")
 	ap.add_argument("--output-dir", required=True)
+	ap.add_argument("--gap-penalty", type=float, default=0.3)
+	ap.add_argument("--merge-penalty", type=float, default=0.2)
+	ap.add_argument("--band", type=float, default=0.1,
+		help="Band fraction around diagonal (0 to disable)")
 	args = ap.parse_args()
 
 	fr_dir = Path(args.fr_dir)
@@ -198,7 +205,8 @@ def main():
 		fr_emb = model.encode(fr_sents, convert_to_numpy=True, show_progress_bar=False)
 		en_emb = model.encode(en_sents, convert_to_numpy=True, show_progress_bar=False)
 		scores = 1 - (fr_emb @ en_emb.T)
-		alignment = dp_align(scores)
+		band = args.band if args.band > 0 else None
+		alignment = dp_align(scores, args.gap_penalty, args.merge_penalty, band)
 
 		print_alignment(fr_sents, en_sents, alignment)
 
