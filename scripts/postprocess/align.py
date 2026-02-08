@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import sys
 from pathlib import Path
 import numpy as np
 from sentence_transformers import SentenceTransformer
@@ -123,35 +124,31 @@ def alignment_type(fr_idx, en_idx):
 	return f"{nf}:{ne}"
 
 
-def align_pair(fr_path, en_path, model):
-	fr_sents = load_sentences(fr_path)
-	en_sents = load_sentences(en_path)
-
-	fr_emb = model.encode(fr_sents, convert_to_numpy=True, show_progress_bar=False)
-	en_emb = model.encode(en_sents, convert_to_numpy=True, show_progress_bar=False)
-	scores = 1 - (fr_emb @ en_emb.T)
-
-	alignment = dp_align(scores)
-
-	return alignment, len(fr_sents), len(en_sents)
+def write_alignment_tsv(out_path, fr_filename, en_filename, alignment):
+	with open(out_path, "w", encoding="utf-8") as f:
+		for fr_idx, en_idx, score in alignment:
+			if not fr_idx or not en_idx:
+				continue
+			for fi in fr_idx:
+				for ej in en_idx:
+					f.write(f"{fr_filename}\t{fi}\t{en_filename}\t{ej}\n")
 
 
-def make_document(fr_stem, en_stem, corpus, alignment):
-	return {
-		"_id": f"{corpus}_{fr_stem}",
-		"corpus": corpus,
-		"fr_doc": f"{corpus}_fr_{fr_stem}",
-		"en_doc": f"{corpus}_en_{en_stem}",
-		"pairs": [
-			{
-				"fr": fr_idx,
-				"en": en_idx,
-				"score": round(1 - score, 3),
-				"type": alignment_type(fr_idx, en_idx),
-			}
-			for fr_idx, en_idx, score in alignment
-		],
-	}
+def print_alignment(fr_sents, en_sents, alignment):
+	for fr_idx, en_idx, score in alignment:
+		atype = alignment_type(fr_idx, en_idx)
+		sim = round(1 - score, 3) if fr_idx and en_idx else None
+		fr_text = " ||| ".join(fr_sents[i] for i in fr_idx) if fr_idx else ""
+		en_text = " ||| ".join(en_sents[j] for j in en_idx) if en_idx else ""
+		header = f"[{atype}]"
+		if sim is not None:
+			header += f" sim={sim}"
+		print(header)
+		if fr_text:
+			print(f"  FR: {fr_text}")
+		if en_text:
+			print(f"  EN: {en_text}")
+		print()
 
 
 def main():
@@ -160,7 +157,6 @@ def main():
 	ap.add_argument("--en-dir", required=True)
 	ap.add_argument("--index", required=True, help="TSV with fr_file, en_file columns")
 	ap.add_argument("--output-dir", required=True)
-	ap.add_argument("--corpus", default="maupassant")
 	args = ap.parse_args()
 
 	fr_dir = Path(args.fr_dir)
@@ -168,7 +164,7 @@ def main():
 	output_dir = Path(args.output_dir)
 	output_dir.mkdir(parents=True, exist_ok=True)
 
-	print("Loading LaBSE...")
+	print("Loading LaBSE...", file=sys.stderr)
 	model = SentenceTransformer("sentence-transformers/LaBSE")
 
 	with open(args.index, newline="", encoding="utf-8") as f:
@@ -185,19 +181,32 @@ def main():
 		en_path = en_dir / f"{en_file}.conllu"
 
 		if not fr_path.exists():
-			print(f"Missing: {fr_path}")
+			print(f"Missing: {fr_path}", file=sys.stderr)
 			continue
 		if not en_path.exists():
-			print(f"Missing: {en_path}")
+			print(f"Missing: {en_path}", file=sys.stderr)
 			continue
 
-		print(f"Aligning: {fr_file} <-> {en_file}")
-		alignment, n_fr, n_en = align_pair(fr_path, en_path, model)
-		print(f"  {n_fr} FR, {n_en} EN -> {len(alignment)} pairs")
+		fr_sents = load_sentences(fr_path)
+		en_sents = load_sentences(en_path)
+		print(
+			f"Aligning: {fr_file} <-> {en_file} "
+			f"({len(fr_sents)} FR, {len(en_sents)} EN)",
+			file=sys.stderr,
+		)
 
-		doc = make_document(fr_file, en_file, args.corpus, alignment)
-		out_path = output_dir / f"{fr_file}_alignment.json"
-		out_path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+		fr_emb = model.encode(fr_sents, convert_to_numpy=True, show_progress_bar=False)
+		en_emb = model.encode(en_sents, convert_to_numpy=True, show_progress_bar=False)
+		scores = 1 - (fr_emb @ en_emb.T)
+		alignment = dp_align(scores)
+
+		print_alignment(fr_sents, en_sents, alignment)
+
+		fr_filename = f"{fr_file}.conllu"
+		en_filename = f"{en_file}.conllu"
+		tsv_path = output_dir / f"{fr_file}_alignment.tsv"
+		write_alignment_tsv(tsv_path, fr_filename, en_filename, alignment)
+		print(f"  -> {tsv_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":
