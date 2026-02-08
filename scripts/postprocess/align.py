@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import json
-import math
-import sys
 from pathlib import Path
-
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
@@ -54,16 +52,9 @@ def load_sentences(path):
 		raise ValueError(f"Unknown file format: {path.suffix} (expected .conllu or .json)")
 
 
-def gale_church_cost(len_s, len_t, mean_ratio=1.1, var=6.8):
-	if len_t == 0:
-		return float("inf") if len_s > 0 else 0
-	delta = (len_s - len_t * mean_ratio) / math.sqrt(len_t * var)
-	return abs(delta)
-
-
-def dp_align(scores, gap_penalty=0.5):
+def dp_align(scores, gap_penalty=0.5, merge_penalty=0.1):
 	n, m = scores.shape
-	dp = np.full((n + 1, m + 1), float("inf"))
+	dp = np.full((n + 1, m + 1), np.inf)
 	back = np.zeros((n + 1, m + 1, 2), dtype=int)
 	dp[0, 0] = 0
 
@@ -73,17 +64,23 @@ def dp_align(scores, gap_penalty=0.5):
 				continue
 			candidates = []
 			if i >= 1 and j >= 1:
-				candidates.append((dp[i - 1, j - 1] + scores[i - 1, j - 1], i - 1, j - 1))
+				candidates.append((dp[i-1, j-1] + scores[i-1, j-1], i-1, j-1))
 			if i >= 2 and j >= 1:
-				merged = (scores[i - 2, j - 1] + scores[i - 1, j - 1]) / 2
-				candidates.append((dp[i - 2, j - 1] + merged + 0.1, i - 2, j - 1))
+				merged = (scores[i-2, j-1] + scores[i-1, j-1]) / 2
+				candidates.append((dp[i-2, j-1] + merged + merge_penalty, i-2, j-1))
 			if i >= 1 and j >= 2:
-				merged = (scores[i - 1, j - 2] + scores[i - 1, j - 1]) / 2
-				candidates.append((dp[i - 1, j - 2] + merged + 0.1, i - 1, j - 2))
+				merged = (scores[i-1, j-2] + scores[i-1, j-1]) / 2
+				candidates.append((dp[i-1, j-2] + merged + merge_penalty, i-1, j-2))
+			if i >= 3 and j >= 1:
+				merged = (scores[i-3, j-1] + scores[i-2, j-1] + scores[i-1, j-1]) / 3
+				candidates.append((dp[i-3, j-1] + merged + merge_penalty * 2, i-3, j-1))
+			if i >= 1 and j >= 3:
+				merged = (scores[i-1, j-3] + scores[i-1, j-2] + scores[i-1, j-1]) / 3
+				candidates.append((dp[i-1, j-3] + merged + merge_penalty * 2, i-1, j-3))
 			if i >= 1:
-				candidates.append((dp[i - 1, j] + gap_penalty, i - 1, j))
+				candidates.append((dp[i-1, j] + gap_penalty, i-1, j))
 			if j >= 1:
-				candidates.append((dp[i, j - 1] + gap_penalty, i, j - 1))
+				candidates.append((dp[i, j-1] + gap_penalty, i, j-1))
 
 			if candidates:
 				best = min(candidates, key=lambda x: x[0])
@@ -97,75 +94,110 @@ def dp_align(scores, gap_penalty=0.5):
 		fr_idx = list(range(pi, i)) if i > pi else []
 		en_idx = list(range(pj, j)) if j > pj else []
 		if fr_idx or en_idx:
-			alignment.append((fr_idx, en_idx))
-		i, j = pi, pj
+			if fr_idx and en_idx:
+				score = float(np.mean([scores[fi, ej] for fi in fr_idx for ej in en_idx]))
+			else:
+				score = 0.0
+			alignment.append((fr_idx, en_idx, score))
+		i, j = int(pi), int(pj)
 
 	return list(reversed(alignment))
 
 
-def gale_church_matrix(fr_sents, en_sents):
-	n, m = len(fr_sents), len(en_sents)
-	fr_lens = [len(s) for s in fr_sents]
-	en_lens = [len(s) for s in en_sents]
-	scores = np.zeros((n, m))
-	for i in range(n):
-		for j in range(m):
-			scores[i, j] = gale_church_cost(fr_lens[i], en_lens[j])
-	return scores
+def alignment_type(fr_idx, en_idx):
+	nf, ne = len(fr_idx), len(en_idx)
+	if nf == 0:
+		return "en_gap"
+	if ne == 0:
+		return "fr_gap"
+	if nf == 1 and ne == 1:
+		return "1:1"
+	if nf == 2 and ne == 1:
+		return "2:1"
+	if nf == 1 and ne == 2:
+		return "1:2"
+	if nf == 3 and ne == 1:
+		return "3:1"
+	if nf == 1 and ne == 3:
+		return "1:3"
+	return f"{nf}:{ne}"
 
 
-def labse_matrix(fr_sents, en_sents, model):
-	fr_emb = model.encode(fr_sents, convert_to_numpy=True)
-	en_emb = model.encode(en_sents, convert_to_numpy=True)
-	similarity = fr_emb @ en_emb.T
-	return 1 - similarity
+def align_pair(fr_path, en_path, model):
+	fr_sents = load_sentences(fr_path)
+	en_sents = load_sentences(en_path)
+
+	fr_emb = model.encode(fr_sents, convert_to_numpy=True, show_progress_bar=False)
+	en_emb = model.encode(en_sents, convert_to_numpy=True, show_progress_bar=False)
+	scores = 1 - (fr_emb @ en_emb.T)
+
+	alignment = dp_align(scores)
+
+	return alignment, len(fr_sents), len(en_sents)
+
+
+def make_document(fr_stem, en_stem, corpus, alignment):
+	return {
+		"_id": f"{corpus}_{fr_stem}",
+		"corpus": corpus,
+		"fr_doc": f"{corpus}_fr_{fr_stem}",
+		"en_doc": f"{corpus}_en_{en_stem}",
+		"pairs": [
+			{
+				"fr": fr_idx,
+				"en": en_idx,
+				"score": round(1 - score, 3),
+				"type": alignment_type(fr_idx, en_idx),
+			}
+			for fr_idx, en_idx, score in alignment
+		],
+	}
 
 
 def main():
 	ap = argparse.ArgumentParser()
-	ap.add_argument("source", help="Source file (.conllu or .json)")
-	ap.add_argument("target", help="Target file (.conllu or .json)")
-	ap.add_argument("--method", choices=["gc", "labse", "both"], default="both")
-	ap.add_argument("--output", "-o")
+	ap.add_argument("--fr-dir", required=True)
+	ap.add_argument("--en-dir", required=True)
+	ap.add_argument("--index", required=True, help="TSV with fr_file, en_file columns")
+	ap.add_argument("--output-dir", required=True)
+	ap.add_argument("--corpus", default="maupassant")
 	args = ap.parse_args()
 
-	source_sents = load_sentences(args.source)
-	target_sents = load_sentences(args.target)
+	fr_dir = Path(args.fr_dir)
+	en_dir = Path(args.en_dir)
+	output_dir = Path(args.output_dir)
+	output_dir.mkdir(parents=True, exist_ok=True)
 
-	print(f"Source: {len(source_sents)} sentences, Target: {len(target_sents)} sentences", file=sys.stderr)
+	print("Loading LaBSE...")
+	model = SentenceTransformer("sentence-transformers/LaBSE")
 
-	if args.method in ("gc", "both"):
-		gc_scores = gale_church_matrix(source_sents, target_sents)
-		gc_align = dp_align(gc_scores)
+	with open(args.index, newline="", encoding="utf-8") as f:
+		reader = csv.DictReader(f, delimiter="\t")
+		rows = list(reader)
 
-	if args.method in ("labse", "both"):
-		print("Loading LaBSE...", file=sys.stderr)
-		model = SentenceTransformer("sentence-transformers/LaBSE")
-		labse_scores = labse_matrix(source_sents, target_sents, model)
-		labse_align = dp_align(labse_scores)
+	for row in rows:
+		fr_file = row.get("fr_file", "").strip()
+		en_file = row.get("en_file", "").strip()
+		if not fr_file or not en_file:
+			continue
 
-	out = open(args.output, "w", encoding="utf-8") if args.output else sys.stdout
+		fr_path = fr_dir / f"{fr_file}.conllu"
+		en_path = en_dir / f"{en_file}.conllu"
 
-	if args.method == "both":
-		print("method\tsrc_idx\ttgt_idx\tsrc_text\ttgt_text", file=out)
-		for src_idx, tgt_idx in gc_align:
-			src_text = " ||| ".join(source_sents[i] for i in src_idx) if src_idx else ""
-			tgt_text = " ||| ".join(target_sents[j] for j in tgt_idx) if tgt_idx else ""
-			print(f"gc\t{src_idx}\t{tgt_idx}\t{src_text[:100]}\t{tgt_text[:100]}", file=out)
-		for src_idx, tgt_idx in labse_align:
-			src_text = " ||| ".join(source_sents[i] for i in src_idx) if src_idx else ""
-			tgt_text = " ||| ".join(target_sents[j] for j in tgt_idx) if tgt_idx else ""
-			print(f"labse\t{src_idx}\t{tgt_idx}\t{src_text[:100]}\t{tgt_text[:100]}", file=out)
-	else:
-		align = gc_align if args.method == "gc" else labse_align
-		print("src_idx\ttgt_idx\tsrc_text\ttgt_text", file=out)
-		for src_idx, tgt_idx in align:
-			src_text = " ||| ".join(source_sents[i] for i in src_idx) if src_idx else ""
-			tgt_text = " ||| ".join(target_sents[j] for j in tgt_idx) if tgt_idx else ""
-			print(f"{src_idx}\t{tgt_idx}\t{src_text[:100]}\t{tgt_text[:100]}", file=out)
+		if not fr_path.exists():
+			print(f"Missing: {fr_path}")
+			continue
+		if not en_path.exists():
+			print(f"Missing: {en_path}")
+			continue
 
-	if args.output:
-		out.close()
+		print(f"Aligning: {fr_file} <-> {en_file}")
+		alignment, n_fr, n_en = align_pair(fr_path, en_path, model)
+		print(f"  {n_fr} FR, {n_en} EN -> {len(alignment)} pairs")
+
+		doc = make_document(fr_file, en_file, args.corpus, alignment)
+		out_path = output_dir / f"{fr_file}_alignment.json"
+		out_path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 if __name__ == "__main__":
