@@ -53,8 +53,48 @@ def load_sentences(path):
 		raise ValueError(f"Unknown file format: {path.suffix} (expected .conllu or .json)")
 
 
-def dp_align(scores, gap_penalty=0.3, merge_penalty=0.2, band_fraction=0.1):
-	n, m = scores.shape
+def compute_score_matrices(fr_sents, en_sents, model):
+	fr_emb = model.encode(fr_sents, convert_to_numpy=True, show_progress_bar=False)
+	en_emb = model.encode(en_sents, convert_to_numpy=True, show_progress_bar=False)
+	scores_1_1 = 1 - (fr_emb @ en_emb.T)
+
+	fr_bigrams = [f"{fr_sents[i]} {fr_sents[i+1]}" for i in range(len(fr_sents) - 1)]
+	en_bigrams = [f"{en_sents[j]} {en_sents[j+1]}" for j in range(len(en_sents) - 1)]
+	fr_trigrams = [
+		f"{fr_sents[i]} {fr_sents[i+1]} {fr_sents[i+2]}"
+		for i in range(len(fr_sents) - 2)
+	]
+	en_trigrams = [
+		f"{en_sents[j]} {en_sents[j+1]} {en_sents[j+2]}"
+		for j in range(len(en_sents) - 2)
+	]
+
+	scores_2_1 = None
+	if fr_bigrams:
+		fr_bi_emb = model.encode(fr_bigrams, convert_to_numpy=True, show_progress_bar=False)
+		scores_2_1 = 1 - (fr_bi_emb @ en_emb.T)
+
+	scores_1_2 = None
+	if en_bigrams:
+		en_bi_emb = model.encode(en_bigrams, convert_to_numpy=True, show_progress_bar=False)
+		scores_1_2 = 1 - (fr_emb @ en_bi_emb.T)
+
+	scores_3_1 = None
+	if fr_trigrams:
+		fr_tri_emb = model.encode(fr_trigrams, convert_to_numpy=True, show_progress_bar=False)
+		scores_3_1 = 1 - (fr_tri_emb @ en_emb.T)
+
+	scores_1_3 = None
+	if en_trigrams:
+		en_tri_emb = model.encode(en_trigrams, convert_to_numpy=True, show_progress_bar=False)
+		scores_1_3 = 1 - (fr_emb @ en_tri_emb.T)
+
+	return scores_1_1, scores_2_1, scores_1_2, scores_3_1, scores_1_3
+
+
+def dp_align(score_matrices, gap_penalty=0.3, merge_penalty=0.2, band_fraction=0.1):
+	scores_1_1, scores_2_1, scores_1_2, scores_3_1, scores_1_3 = score_matrices
+	n, m = scores_1_1.shape
 	dp = np.full((n + 1, m + 1), np.inf)
 	back = np.zeros((n + 1, m + 1, 2), dtype=int)
 	dp[0, 0] = 0
@@ -68,19 +108,15 @@ def dp_align(scores, gap_penalty=0.3, merge_penalty=0.2, band_fraction=0.1):
 					continue
 			candidates = []
 			if i >= 1 and j >= 1:
-				candidates.append((dp[i-1, j-1] + scores[i-1, j-1], i-1, j-1))
-			if i >= 2 and j >= 1:
-				merged = (scores[i-2, j-1] + scores[i-1, j-1]) / 2
-				candidates.append((dp[i-2, j-1] + merged + merge_penalty, i-2, j-1))
-			if i >= 1 and j >= 2:
-				merged = (scores[i-1, j-2] + scores[i-1, j-1]) / 2
-				candidates.append((dp[i-1, j-2] + merged + merge_penalty, i-1, j-2))
-			if i >= 3 and j >= 1:
-				merged = (scores[i-3, j-1] + scores[i-2, j-1] + scores[i-1, j-1]) / 3
-				candidates.append((dp[i-3, j-1] + merged + merge_penalty * 2, i-3, j-1))
-			if i >= 1 and j >= 3:
-				merged = (scores[i-1, j-3] + scores[i-1, j-2] + scores[i-1, j-1]) / 3
-				candidates.append((dp[i-1, j-3] + merged + merge_penalty * 2, i-1, j-3))
+				candidates.append((dp[i-1, j-1] + scores_1_1[i-1, j-1], i-1, j-1))
+			if i >= 2 and j >= 1 and scores_2_1 is not None:
+				candidates.append((dp[i-2, j-1] + scores_2_1[i-2, j-1] + merge_penalty, i-2, j-1))
+			if i >= 1 and j >= 2 and scores_1_2 is not None:
+				candidates.append((dp[i-1, j-2] + scores_1_2[i-1, j-2] + merge_penalty, i-1, j-2))
+			if i >= 3 and j >= 1 and scores_3_1 is not None:
+				candidates.append((dp[i-3, j-1] + scores_3_1[i-3, j-1] + merge_penalty * 3, i-3, j-1))
+			if i >= 1 and j >= 3 and scores_1_3 is not None:
+				candidates.append((dp[i-1, j-3] + scores_1_3[i-1, j-3] + merge_penalty * 3, i-1, j-3))
 			if i >= 1:
 				candidates.append((dp[i-1, j] + gap_penalty, i-1, j))
 			if j >= 1:
@@ -98,8 +134,20 @@ def dp_align(scores, gap_penalty=0.3, merge_penalty=0.2, band_fraction=0.1):
 		fr_idx = list(range(pi, i)) if i > pi else []
 		en_idx = list(range(pj, j)) if j > pj else []
 		if fr_idx or en_idx:
-			if fr_idx and en_idx:
-				score = float(np.mean([scores[fi, ej] for fi in fr_idx for ej in en_idx]))
+			nf, ne = len(fr_idx), len(en_idx)
+			if nf >= 1 and ne >= 1:
+				if nf == 1 and ne == 1:
+					score = float(scores_1_1[fr_idx[0], en_idx[0]])
+				elif nf == 2 and ne == 1:
+					score = float(scores_2_1[fr_idx[0], en_idx[0]])
+				elif nf == 1 and ne == 2:
+					score = float(scores_1_2[fr_idx[0], en_idx[0]])
+				elif nf == 3 and ne == 1:
+					score = float(scores_3_1[fr_idx[0], en_idx[0]])
+				elif nf == 1 and ne == 3:
+					score = float(scores_1_3[fr_idx[0], en_idx[0]])
+				else:
+					score = float(scores_1_1[fr_idx[0], en_idx[0]])
 			else:
 				score = 0.0
 			alignment.append((fr_idx, en_idx, score))
@@ -202,11 +250,9 @@ def main():
 			file=sys.stderr,
 		)
 
-		fr_emb = model.encode(fr_sents, convert_to_numpy=True, show_progress_bar=False)
-		en_emb = model.encode(en_sents, convert_to_numpy=True, show_progress_bar=False)
-		scores = 1 - (fr_emb @ en_emb.T)
+		score_matrices = compute_score_matrices(fr_sents, en_sents, model)
 		band = args.band if args.band > 0 else None
-		alignment = dp_align(scores, args.gap_penalty, args.merge_penalty, band)
+		alignment = dp_align(score_matrices, args.gap_penalty, args.merge_penalty, band)
 
 		print_alignment(fr_sents, en_sents, alignment)
 
