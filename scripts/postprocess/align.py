@@ -92,7 +92,7 @@ def compute_score_matrices(fr_sents, en_sents, model):
 	return scores_1_1, scores_2_1, scores_1_2, scores_3_1, scores_1_3
 
 
-def dp_align(score_matrices, gap_penalty=0.3, merge_penalty=0.2, band_fraction=0.1):
+def dp_align(score_matrices, gap_penalty=0.3, merge_penalty_2=0.2, merge_penalty_3=0.45, band_fraction=0.1):
 	scores_1_1, scores_2_1, scores_1_2, scores_3_1, scores_1_3 = score_matrices
 	n, m = scores_1_1.shape
 	dp = np.full((n + 1, m + 1), np.inf)
@@ -110,13 +110,13 @@ def dp_align(score_matrices, gap_penalty=0.3, merge_penalty=0.2, band_fraction=0
 			if i >= 1 and j >= 1:
 				candidates.append((dp[i-1, j-1] + scores_1_1[i-1, j-1], i-1, j-1))
 			if i >= 2 and j >= 1 and scores_2_1 is not None:
-				candidates.append((dp[i-2, j-1] + scores_2_1[i-2, j-1] + merge_penalty, i-2, j-1))
+				candidates.append((dp[i-2, j-1] + scores_2_1[i-2, j-1] + merge_penalty_2, i-2, j-1))
 			if i >= 1 and j >= 2 and scores_1_2 is not None:
-				candidates.append((dp[i-1, j-2] + scores_1_2[i-1, j-2] + merge_penalty, i-1, j-2))
+				candidates.append((dp[i-1, j-2] + scores_1_2[i-1, j-2] + merge_penalty_2, i-1, j-2))
 			if i >= 3 and j >= 1 and scores_3_1 is not None:
-				candidates.append((dp[i-3, j-1] + scores_3_1[i-3, j-1] + merge_penalty * 3, i-3, j-1))
+				candidates.append((dp[i-3, j-1] + scores_3_1[i-3, j-1] + merge_penalty_3, i-3, j-1))
 			if i >= 1 and j >= 3 and scores_1_3 is not None:
-				candidates.append((dp[i-1, j-3] + scores_1_3[i-1, j-3] + merge_penalty * 3, i-1, j-3))
+				candidates.append((dp[i-1, j-3] + scores_1_3[i-1, j-3] + merge_penalty_3, i-1, j-3))
 			if i >= 1:
 				candidates.append((dp[i-1, j] + gap_penalty, i-1, j))
 			if j >= 1:
@@ -209,7 +209,8 @@ def main():
 	ap.add_argument("--index", required=True, help="TSV with fr_file, en_file columns")
 	ap.add_argument("--output-dir", required=True)
 	ap.add_argument("--gap-penalty", type=float, default=0.3)
-	ap.add_argument("--merge-penalty", type=float, default=0.2)
+	ap.add_argument("--merge-penalty-2", type=float, default=0.2)
+	ap.add_argument("--merge-penalty-3", type=float, default=0.45)
 	ap.add_argument("--band", type=float, default=0.1,
 		help="Band fraction around diagonal (0 to disable)")
 	args = ap.parse_args()
@@ -252,7 +253,10 @@ def main():
 
 		score_matrices = compute_score_matrices(fr_sents, en_sents, model)
 		band = args.band if args.band > 0 else None
-		alignment = dp_align(score_matrices, args.gap_penalty, args.merge_penalty, band)
+		alignment = dp_align(
+			score_matrices, args.gap_penalty,
+			args.merge_penalty_2, args.merge_penalty_3, band,
+		)
 
 		print_alignment(fr_sents, en_sents, alignment)
 
