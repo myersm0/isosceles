@@ -7,16 +7,16 @@ stratification by decade, author, and other dimensions.
 
 Usage:
   # Sample 10 chunks from a single novel (for testing)
-  python sample_eltec.py novels/FRA001.txt output/ --chunks 10 --model claude-sonnet-4-20250514
+  python sample_eltec.py novels/FRA001.txt output/ --chunks 10 --model claude-sonnet-4-5
   
   # Sample from all novels in a directory
-  python sample_eltec.py novels/ output/ --chunks 100 --model claude-sonnet-4-20250514
+  python sample_eltec.py novels/ output/ --chunks 100 --model claude-sonnet-4-5
   
   # Dry run to see what would be sampled
   python sample_eltec.py novels/ output/ --chunks 50 --dry-run
   
   # Use Opus for gold annotations
-  python sample_eltec.py novels/ output/ --chunks 20 --model claude-opus-4-20250514 --tier gold
+  python sample_eltec.py novels/ output/ --chunks 20 --model claude-opus-4-5 --tier gold
 """
 
 import argparse
@@ -374,16 +374,16 @@ def main():
 		epilog="""
 Examples:
   # Sample 10 chunks from one novel (testing)
-  %(prog)s novel.txt output/ --chunks 10 --model claude-sonnet-4-20250514
+  %(prog)s novel.txt output/ --chunks 10 --model claude-sonnet-4-5
   
   # Sample from all novels in directory  
-  %(prog)s novels/ output/ --chunks 100 --model claude-sonnet-4-20250514
+  %(prog)s novels/ output/ --chunks 100 --model claude-sonnet-4-5
   
   # Dry run
   %(prog)s novels/ output/ --chunks 50 --dry-run
   
   # Gold tier with Opus
-  %(prog)s novels/ output/ --chunks 20 --model claude-opus-4-20250514 --tier gold
+  %(prog)s novels/ output/ --chunks 20 --model claude-opus-4-5 --tier gold
 """
 	)
 	ap.add_argument("input", help="Input file or directory of ELTeC novels")
