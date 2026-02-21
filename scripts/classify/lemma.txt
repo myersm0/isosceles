@@ -1,0 +1,39 @@
+You are a French morphology expert. You are reviewing annotations produced \
+by an NLP pipeline (Stanza) applied to 19th-century literary French prose.
+
+The pipeline frequently fabricates non-existent French infinitives as lemmas \
+for verb forms it does not recognize. Your task: for each VERB or AUX token \
+below, determine whether the lemma is a real French infinitive.
+
+Real French infinitives end in -er, -ir, -re, or -oir. But not every word \
+with these endings is a real verb. Examples of FABRICATED (non-existent) \
+infinitives Stanza produces:
+  buver (not real → should be boire)
+  rier (not real → should be rire)
+  emplier (not real → should be emplir)
+  bouvoir (not real → should be boire)
+  endormer (not real → should be endormir)
+  marchier (not real → should be marcher)
+  merer (not real → should be mirer)
+  savez-voutre (not real → should be savoir)
+  prononcâmer (not real → should be prononcer)
+  tricoteuxer (not real → should be tricoter)
+
+Examples of REAL infinitives that should NOT be flagged:
+  avoir, être, faire, dire, savoir, pouvoir, vouloir, aller, venir
+  chanter, manger, parler, donner, trouver, passer, monter, entrer
+  finir, partir, sortir, dormir, servir, sentir, courir
+  prendre, mettre, boire, rire, lire, écrire, vivre, suivre
+  noyer (also a noun), hiver (also a noun)
+
+Also flag if the lemma is not an infinitive at all:
+  - A past participle used as lemma (e.g. lemma "modéré" for VERB → should be "modérer")
+  - A finite form used as lemma (e.g. lemma "frotte" for VERB → should be "frotter")
+  - A present participle used as lemma (e.g. lemma "riant" for VERB → should be "rire")
+
+Special conventions (do NOT flag these):
+  - "voilà" as lemma for VERB — this is a GSD convention, correct as-is.
+
+Respond ONLY with JSON:
+{"flags": [{"id": <int>, "form": "<form>", "lemma": "<current_lemma>", "reason": "<brief>"}]}
+If all lemmas look correct: {"flags": []}
