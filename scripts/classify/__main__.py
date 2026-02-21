@@ -179,6 +179,16 @@ def main():
 					  f'{current} → {expected}')
 				continue
 
+		elif task in ("aux", "que", "adjadv"):
+			current = flag.get("current_upos", "")
+			expected = flag.get("expected_upos", "")
+			if not expected or expected == "None" or expected == current:
+				print(f"  [filter] Dropped vacuous {task} flag: "
+					  f"{flag.get('sent_id')} tok {flag.get('id')} "
+					  f'"{flag.get("form")}" '
+					  f'{current} → {expected}')
+				continue
+
 		filtered.append(flag)
 	all_flags = filtered
 	dropped = before_filter - len(all_flags)

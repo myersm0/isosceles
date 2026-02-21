@@ -27,6 +27,11 @@ task_defaults = {
 		"model": "gemma3:12b",
 		"think": True,
 	},
+	"adjadv": {
+		"type": "llm",
+		"model": "qwen3:8b",
+		"think": True,
+	},
 }
 
 all_tasks = list(task_defaults.keys())

@@ -96,9 +96,44 @@ def format_que(candidates, all_tokens):
 	return "\n".join(lines)
 
 
+# --- adjadv ---
+
+from .adjadv_words import swing_words
+
+_swing_lemmas = set(swing_words.keys())
+
+
+def filter_adjadv(tokens):
+	return [t for t in tokens if t["lemma"] in _swing_lemmas and t["upos"] in ("ADJ", "ADV")]
+
+
+def format_adjadv(candidates, all_tokens):
+	token_by_id = {t["id"]: t for t in all_tokens}
+	lines = []
+	for t in candidates:
+		head = token_by_id.get(t["head"], {})
+		head_form = head.get("form", "ROOT")
+		head_upos = head.get("upos", "ROOT")
+
+		guidance = swing_words[t["lemma"]]
+		guide_text = (
+			f'  ADJ: {guidance["adj"]}\n'
+			f'  ADV: {guidance["adv"]}'
+		)
+
+		lines.append(
+			f"ID={t['id']} FORM=\"{t['form']}\" LEMMA=\"{t['lemma']}\" "
+			f"UPOS={t['upos']} HEAD=\"{head_form}\" HEAD_UPOS={head_upos} "
+			f"DEPREL={t['deprel']}\n"
+			f"  Guidance for \"{t['lemma']}\":\n{guide_text}"
+		)
+	return "\n\n".join(lines)
+
+
 task_filters = {
 	"lemma": (filter_lemma, format_lemma),
 	"tense": (filter_tense, format_tense),
 	"aux": (filter_aux, format_aux),
 	"que": (filter_que, format_que),
+	"adjadv": (filter_adjadv, format_adjadv),
 }

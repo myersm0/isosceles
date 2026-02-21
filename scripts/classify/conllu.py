@@ -37,6 +37,7 @@ def parse_block(lines):
 					"lemma": fields[2],
 					"upos": fields[3],
 					"feats": fields[5] if fields[5] != "_" else "_",
+					"head": int(fields[6]) if fields[6] != "_" else 0,
 					"deprel": fields[7],
 				})
 	return sent_id, sent_text, tokens
