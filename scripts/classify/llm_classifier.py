@@ -16,11 +16,12 @@ def load_prompt(task_name):
 
 
 def run(blocks, parsed_blocks, task_name, model, think=True, timeout=120):
-	"""Run a single LLM classifier pass. Returns list of flag dicts."""
+	"""Run a single LLM classifier pass. Returns (flags, failed_sent_ids)."""
 	system_prompt = load_prompt(task_name)
 	filter_fn, format_fn = task_filters[task_name]
 
 	all_flags = []
+	failed_sent_ids = set()
 	total_time = 0
 	skipped = 0
 
@@ -46,6 +47,7 @@ def run(blocks, parsed_blocks, task_name, model, think=True, timeout=120):
 
 		if not response or "flags" not in response:
 			print(f"[{sent_id}] {task_name}/{model} — no response ({elapsed:.1f}s)")
+			failed_sent_ids.add(sent_id)
 			continue
 
 		flags = response["flags"]
@@ -68,9 +70,10 @@ def run(blocks, parsed_blocks, task_name, model, think=True, timeout=120):
 	queried = len(parsed_blocks) - skipped
 	avg = total_time / max(1, queried)
 	print(f"  [{task_name}/{model}] {total_time:.1f}s total, {avg:.1f}s/sent, "
-		  f"{len(all_flags)} flags, {skipped} skipped\n")
+		  f"{len(all_flags)} flags, {skipped} skipped"
+		  f"{f', {len(failed_sent_ids)} failed' if failed_sent_ids else ''}\n")
 
-	return all_flags
+	return all_flags, failed_sent_ids
 
 
 def _format_flag_detail(task_name, flag):
