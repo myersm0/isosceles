@@ -150,16 +150,9 @@ def parse_results(results):
 			if block.get("type") == "text":
 				text += block.get("text", "")
 
-		text = text.strip()
-		if text.startswith("```"):
-			text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-			if text.endswith("```"):
-				text = text[:-3]
-			text = text.strip()
-
-		try:
-			response = json.loads(text)
-		except json.JSONDecodeError:
+		from .review import extract_json
+		response = extract_json(text)
+		if response is None:
 			errors.append((custom_id, "parse_error", text[:100]))
 			continue
 

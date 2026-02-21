@@ -134,6 +134,39 @@ def build_review_prompt(flag, token_lookup, templates):
 	return user_prompt
 
 
+def extract_json(text):
+	"""Extract JSON object from text that may contain reasoning before/after."""
+	text = text.strip()
+	# Strip markdown fences
+	if text.startswith("```"):
+		text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+		if text.endswith("```"):
+			text = text[:-3]
+		text = text.strip()
+	# Try direct parse first
+	try:
+		return json.loads(text)
+	except json.JSONDecodeError:
+		pass
+	# Find {"action" in the text
+	idx = text.find('{"action"')
+	if idx < 0:
+		return None
+	# Find matching closing brace
+	depth = 0
+	for i in range(idx, len(text)):
+		if text[i] == "{":
+			depth += 1
+		elif text[i] == "}":
+			depth -= 1
+			if depth == 0:
+				try:
+					return json.loads(text[idx:i + 1])
+				except json.JSONDecodeError:
+					return None
+	return None
+
+
 def call_sonnet(system_prompt, user_prompt, model=DEFAULT_MODEL):
 	"""Make a direct Anthropic API call."""
 	api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -144,8 +177,9 @@ def call_sonnet(system_prompt, user_prompt, model=DEFAULT_MODEL):
 	payload = {
 		"model": model,
 		"max_tokens": 256,
+		"system": system_prompt,
 		"messages": [
-			{"role": "user", "content": f"{system_prompt}\n\n{user_prompt}"},
+			{"role": "user", "content": user_prompt},
 		],
 	}
 
@@ -160,15 +194,8 @@ def call_sonnet(system_prompt, user_prompt, model=DEFAULT_MODEL):
 		response.raise_for_status()
 		data = response.json()
 		content = data["content"][0]["text"]
-		# Strip markdown fences if present
-		content = content.strip()
-		if content.startswith("```"):
-			content = content.split("\n", 1)[1] if "\n" in content else content[3:]
-			if content.endswith("```"):
-				content = content[:-3]
-			content = content.strip()
-		return json.loads(content)
-	except (requests.RequestException, json.JSONDecodeError, KeyError, IndexError) as e:
+		return extract_json(content)
+	except (requests.RequestException, KeyError, IndexError) as e:
 		print(f"  API error: {e}", file=sys.stderr)
 		return None
 
@@ -186,8 +213,9 @@ def generate_batch_jsonl(flags, token_lookup, templates, system_prompt, output_p
 				"params": {
 					"model": model,
 					"max_tokens": 256,
+					"system": system_prompt,
 					"messages": [
-						{"role": "user", "content": f"{system_prompt}\n\n{user_prompt}"},
+						{"role": "user", "content": user_prompt},
 					],
 				},
 			}
