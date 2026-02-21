@@ -169,6 +169,33 @@ def main():
 			json.dump(all_flags, f, indent=2, ensure_ascii=False)
 		print(f"Saved {len(all_flags)} flags to {args.flags_out}\n")
 
+	# --- Deduplicate flags by (sent_id, token_id, issue_category) ---
+	# littre:lemma_not_found and lemma are the same category (both flag bad lemmas)
+	# Everything else is its own category
+	def flag_category(flag):
+		task = flag["task"]
+		if task in ("littre", "lemma"):
+			issue = flag.get("issue", "")
+			if task == "littre" and issue != "lemma_not_found":
+				return "littre_upos"
+			return "lemma"
+		return task
+
+	# Within a category, prefer littre over llm
+	category_priority = {"littre": 0, "lemma": 1}
+	seen = {}
+	for flag in all_flags:
+		token_id = flag.get("token_id") or flag.get("id")
+		key = (flag["sent_id"], token_id, flag_category(flag))
+		priority = category_priority.get(flag["task"], 99)
+		if key not in seen or priority < seen[key][0]:
+			seen[key] = (priority, flag)
+	deduped = [flag for _, flag in seen.values()]
+	if len(deduped) < len(all_flags):
+		print(f"Deduplicated: {len(all_flags)} → {len(deduped)} flags "
+			  f"({len(all_flags) - len(deduped)} duplicates removed)\n")
+	all_flags = deduped
+
 	# --- Review phase ---
 	if not args.review and not args.batch:
 		if not args.flags_out:
