@@ -80,7 +80,8 @@ def format_aux(candidates, all_tokens):
 def filter_que(tokens):
 	result = []
 	for t in tokens:
-		if t["lemma"] == "que" or t["form"].lower().rstrip("'\u2019") in ("que", "qu"):
+		lower = t["form"].lower().rstrip("'\u2019")
+		if t["lemma"] == "que" or lower in ("que", "qu"):
 			result.append(t)
 	return result
 

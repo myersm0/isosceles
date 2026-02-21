@@ -6,7 +6,7 @@ task_defaults = {
 	},
 	"lemma": {
 		"type": "llm",
-		"model": "mistral-nemo:12b",
+		"model": "mistral-small3.2:24b",
 		"think": True,
 	},
 	"tense": {

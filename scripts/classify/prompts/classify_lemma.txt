@@ -33,7 +33,12 @@ Also flag if the lemma is not an infinitive at all:
 
 Special conventions (do NOT flag these):
   - "voilà" as lemma for VERB — this is a GSD convention, correct as-is.
+  - Inherently pronominal verbs use the bare infinitive as lemma in GSD, \
+WITHOUT the reflexive pronoun. These are CORRECT:
+    écrier (not s'écrier), enfuir (not s'enfuir), écrouler (not s'écrouler), \
+exclamer (not s'exclamer), emparer (not s'emparer), abstenir (not s'abstenir)
+  Do NOT flag these as fabricated — they are real GSD lemmas.
 
 Respond ONLY with JSON:
-{"flags": [{"id": <int>, "form": "<form>", "lemma": "<current_lemma>", "reason": "<brief>"}]}
+{"flags": [{"id": <int>, "form": "<form>", "lemma": "<current_lemma>", "suggested": "<correct_infinitive>", "reason": "<brief>"}]}
 If all lemmas look correct: {"flags": []}

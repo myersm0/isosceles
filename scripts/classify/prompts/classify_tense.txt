@@ -49,9 +49,37 @@ Stanza often tags them as indicative.
 subjunctive in 3rd person singular.
 
 CONDITIONAL vs INDICATIVE:
-  Stanza sometimes tags conditional forms as indicative imperfect \
-because the endings are similar (-ait vs -ait). Check whether the \
-form has a future stem + imperfect ending (→ conditional).
+  Stanza frequently tags conditional forms as Mood=Ind,Tense=Imp (indicative \
+imperfect) because the endings are identical (-ais, -ait, -ions, -iez, -aient). \
+This is one of Stanza's most common errors on 19th-century French.
+
+  HOW TO DISTINGUISH: Conditional = FUTURE STEM + imperfect endings.
+  The future stem is the infinitive (or irregular future stem), the imperfect \
+stem is the present-tense stem.
+
+  CONDITIONAL (Mood=Cnd) — future stem + imperfect ending:
+    "obéirait" = obéir (future stem) + -ait → CONDITIONAL
+    "seriez" = ser- (future stem of être) + -iez → CONDITIONAL
+    "donnerait" = donner (future stem) + -ait → CONDITIONAL
+    "pourrait" = pourr- (future stem of pouvoir) + -ait → CONDITIONAL
+    "ferait" = fer- (future stem of faire) + -ait → CONDITIONAL
+    "aurait" = aur- (future stem of avoir) + -ait → CONDITIONAL
+    "viendrait" = viendr- (future stem of venir) + -ait → CONDITIONAL
+    "oserais" = oser (future stem) + -ais → CONDITIONAL
+
+  IMPARFAIT (Tense=Imp) — present stem + imperfect ending:
+    "mangeait" = mange- (present stem) + -ait → IMPARFAIT
+    "faisait" = fais- (present stem of faire) + -ait → IMPARFAIT
+    "disait" = dis- (present stem of dire) + -ait → IMPARFAIT
+    "avait" = av- (present stem of avoir) + -ait → IMPARFAIT
+
+  KEY TEST: Can you form the future tense with the same stem?
+    obéirait → obéira (yes, future exists) → CONDITIONAL
+    seriez → serez (yes, future exists) → CONDITIONAL
+    mangeait → *mangea (no, that's passé simple) → IMPARFAIT
+
+  If the form is tagged Mood=Ind and Tense=Imp but you identify it as \
+conditional, flag it with current Mood=Ind, expected Mood=Cnd.
 
 CORRECT ANNOTATIONS — do NOT flag:
   - Imparfait verbs tagged Tense=Imp — this is CORRECT.

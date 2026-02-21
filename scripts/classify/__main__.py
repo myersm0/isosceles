@@ -99,7 +99,7 @@ def run_classifiers(args, blocks, parsed_blocks, tasks):
 			think = defaults.get("think", True) and not args.no_think
 
 			print(f"=== {task_name} ({model}) ===")
-			flags = llm_classifier.run(
+			flags, failed_sent_ids = llm_classifier.run(
 				blocks, parsed_blocks,
 				task_name=task_name,
 				model=model,
@@ -112,7 +112,7 @@ def run_classifiers(args, blocks, parsed_blocks, tasks):
 				ensemble_model = ensemble_config["model"]
 				ensemble_think = ensemble_config.get("think", True) and not args.no_think
 				print(f"=== {task_name} ({ensemble_model}, ensemble) ===")
-				ensemble_flags = llm_classifier.run(
+				ensemble_flags, _ = llm_classifier.run(
 					blocks, parsed_blocks,
 					task_name=task_name,
 					model=ensemble_model,
@@ -152,6 +152,38 @@ def main():
 			sys.exit(1)
 
 		all_flags = run_classifiers(args, blocks, parsed_blocks, tasks)
+
+	# --- Self-contradiction filter ---
+	before_filter = len(all_flags)
+	filtered = []
+	for flag in all_flags:
+		task = flag["task"]
+
+		if task == "lemma":
+			current = flag.get("lemma", "")
+			suggested = flag.get("suggested", "")
+			if current and suggested and suggested == current:
+				print(f"  [filter] Dropped self-contradictory lemma: "
+					  f"{flag.get('sent_id')} tok {flag.get('id')} "
+					  f'"{flag.get("form")}" lemma="{current}" '
+					  f'suggested="{suggested}"')
+				continue
+
+		elif task == "tense":
+			current = flag.get("current", "")
+			expected = flag.get("expected", "")
+			if not expected or expected == "None" or expected == current:
+				print(f"  [filter] Dropped vacuous tense flag: "
+					  f"{flag.get('sent_id')} tok {flag.get('id')} "
+					  f'"{flag.get("form")}" '
+					  f'{current} → {expected}')
+				continue
+
+		filtered.append(flag)
+	all_flags = filtered
+	dropped = before_filter - len(all_flags)
+	if dropped:
+		print(f"Self-contradiction filter: dropped {dropped} flags\n")
 
 	# --- Summary ---
 	print("=" * 60)
