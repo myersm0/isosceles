@@ -1,0 +1,8 @@
+FLAGGED TOKEN: id={token_id}, form="{form}", lemma="{lemma}", upos={upos}, feats={feats}
+ISSUE: The classifier flagged a potential tense/mood error.
+CLASSIFIER NOTE: {issue} {current} → {expected}: {reason}
+CRITICAL REMINDERS:
+- Tense=Imp means IMPARFAIT (imperfect), NOT imperative. Do not change correct imparfait tags.
+- Tense=Past means PASSÉ SIMPLE. Many 1sg/3sg passé simple forms look like present tense.
+- Mood=Cnd is conditional. The -ais/-ait endings are shared with imparfait, but conditional has a future stem.
+If the current annotation is wrong, provide corrected feats. Otherwise no_change.

@@ -1,0 +1,2 @@
+FLAGGED TOKEN: id={token_id}, form="{form}", lemma="{lemma}", upos={upos}, feats={feats}
+ISSUE: The lemma "{lemma}" exists in Littré but as {littre_pos}, which does not match the annotated UPOS={upos}. Check whether the UPOS is correct for this token in context.

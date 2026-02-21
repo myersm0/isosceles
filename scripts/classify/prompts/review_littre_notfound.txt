@@ -1,0 +1,6 @@
+FLAGGED TOKEN: id={token_id}, form="{form}", lemma="{lemma}", upos={upos}, feats={feats}
+ISSUE: The lemma "{lemma}" does not appear in the Littré dictionary (1872). This may indicate:
+- A fabricated lemma (e.g. "buver" should be "boire", "rier" should be "rire")
+- A feminine adjective form used as lemma instead of the masculine citation form (e.g. "amère" should be "amer")
+- A non-infinitive form used as verb lemma (e.g. "modéré" should be "modérer")
+If the lemma is genuinely wrong, provide the correct lemma. If it is a valid modern French word that simply postdates Littré, respond with no_change.

@@ -11,7 +11,7 @@ prompts_dir = Path(__file__).parent / "prompts"
 
 
 def load_prompt(task_name):
-	path = prompts_dir / f"{task_name}.txt"
+	path = prompts_dir / f"classify_{task_name}.txt"
 	return path.read_text(encoding="utf-8").strip()
 
 

@@ -1,0 +1,8 @@
+FLAGGED TOKEN: id={token_id}, form="{form}", lemma="{lemma}", upos={upos}, feats={feats}
+NEXT TOKEN: form="{next_form}", upos={next_upos}
+ISSUE: The classifier flagged the UPOS (AUX vs VERB) as potentially incorrect.
+CLASSIFIER NOTE: {current_upos} → {expected_upos}: {reason}
+GSD CONVENTIONS:
+- être is ALWAYS AUX in GSD (copular, passive, auxiliary, existential — all AUX).
+- avoir is AUX only when forming compound tenses (avoir + past participle). Otherwise VERB.
+If the UPOS is wrong, provide the corrected upos.

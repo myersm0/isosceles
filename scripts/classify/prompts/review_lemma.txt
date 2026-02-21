@@ -1,0 +1,4 @@
+FLAGGED TOKEN: id={token_id}, form="{form}", lemma="{lemma}", upos={upos}, feats={feats}
+ISSUE: The LLM classifier flagged this lemma as potentially not a real French infinitive.
+CLASSIFIER NOTE: {reason}
+If the lemma is genuinely wrong, provide the correct infinitive lemma.

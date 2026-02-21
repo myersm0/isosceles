@@ -1,0 +1,8 @@
+FLAGGED TOKEN: id={token_id}, form="{form}", lemma="{lemma}", upos={upos}, feats={feats}
+ISSUE: The classifier flagged the UPOS as potentially incorrect for this que/qu' token.
+CLASSIFIER NOTE: {current_upos} → {expected_upos}: {reason}
+REMINDER:
+- PRON = relative pronoun (refers to a noun antecedent, functions as object in its clause)
+- SCONJ = subordinating conjunction (completive after speech/thought verbs, comparative, consecutive)
+- ADV = restrictive ne...que ("only")
+If the UPOS is wrong, provide the corrected upos.
