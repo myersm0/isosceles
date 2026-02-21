@@ -72,14 +72,22 @@ stem is the present-tense stem.
     "faisait" = fais- (present stem of faire) + -ait → IMPARFAIT
     "disait" = dis- (present stem of dire) + -ait → IMPARFAIT
     "avait" = av- (present stem of avoir) + -ait → IMPARFAIT
+    "connaissiez" = connaiss- (present stem) + -iez → IMPARFAIT
+    "finissiez" = finiss- (present stem) + -iez → IMPARFAIT
+  Note: -issiez, -issait, -issions endings are ALWAYS imparfait, never \
+conditional. The -iss- is the inchoative present stem, not a future stem.
 
   KEY TEST: Can you form the future tense with the same stem?
     obéirait → obéira (yes, future exists) → CONDITIONAL
     seriez → serez (yes, future exists) → CONDITIONAL
     mangeait → *mangea (no, that's passé simple) → IMPARFAIT
 
-  If the form is tagged Mood=Ind and Tense=Imp but you identify it as \
-conditional, flag it with current Mood=Ind, expected Mood=Cnd.
+  IMPORTANT: If a form is ALREADY tagged Mood=Cnd, it is correctly tagged. \
+In GSD, conditional is always encoded as Mood=Cnd|Tense=Pres. Do NOT flag \
+forms that already have Mood=Cnd — that is the correct GSD encoding.
+
+  Only flag when the form IS conditional but is MISTAGGED as Mood=Ind. \
+Flag with current Mood=Ind, expected Mood=Cnd.
 
 CORRECT ANNOTATIONS — do NOT flag:
   - Imparfait verbs tagged Tense=Imp — this is CORRECT.
