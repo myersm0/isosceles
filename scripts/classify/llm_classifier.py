@@ -15,8 +15,13 @@ def load_prompt(task_name):
 	return path.read_text(encoding="utf-8").strip()
 
 
-def run(blocks, parsed_blocks, task_name, model, think=True, timeout=120):
-	"""Run a single LLM classifier pass. Returns (flags, failed_sent_ids)."""
+def run(blocks, parsed_blocks, task_name, model, think=True, timeout=120,
+		candidate_ids=None):
+	"""Run a single LLM classifier pass. Returns (flags, failed_sent_ids).
+
+	candidate_ids: optional {sent_id: set(token_ids)} to override filter.
+		When provided, only those tokens are checked (for Layer 2 tense).
+	"""
 	system_prompt = load_prompt(task_name)
 	filter_fn, format_fn = task_filters[task_name]
 
@@ -26,7 +31,14 @@ def run(blocks, parsed_blocks, task_name, model, think=True, timeout=120):
 	skipped = 0
 
 	for sent_id, sent_text, tokens in parsed_blocks:
-		candidates = filter_fn(tokens)
+		if candidate_ids is not None:
+			if sent_id not in candidate_ids:
+				skipped += 1
+				continue
+			ids = candidate_ids[sent_id]
+			candidates = [t for t in filter_fn(tokens) if t["id"] in ids]
+		else:
+			candidates = filter_fn(tokens)
 
 		if not candidates:
 			skipped += 1
@@ -99,6 +111,12 @@ def _format_flag_detail(task_name, flag):
 		return f'tok {token_id} "{form}": {current} → {expected} — {reason}'
 
 	elif task_name == "que":
+		current = flag.get("current_upos", "?")
+		expected = flag.get("expected_upos", "?")
+		reason = flag.get("reason", "")
+		return f'tok {token_id} "{form}": {current} → {expected} — {reason}'
+
+	elif task_name == "adjadv":
 		current = flag.get("current_upos", "?")
 		expected = flag.get("expected_upos", "?")
 		reason = flag.get("reason", "")

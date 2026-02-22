@@ -10,7 +10,7 @@ task_defaults = {
 		"think": True,
 	},
 	"tense": {
-		"type": "llm",
+		"type": "morph_llm",
 		"model": "qwen3:8b",
 		"think": True,
 		"ensemble": [

@@ -23,11 +23,14 @@ Usage:
 import argparse
 import json
 import sys
+import time
 
-from .conllu import read_conllu, parse_block
+from .conllu import read_conllu, parse_block, parse_feats
 from .config import task_defaults, all_tasks
 from . import littre as littre_mod
 from . import llm_classifier
+from . import tense_rules
+from .ollama_client import call_ollama
 
 
 def build_parser():
@@ -93,6 +96,44 @@ def run_classifiers(args, blocks, parsed_blocks, tasks):
 					  f"({flag['upos']}): {flag['issue']} — {flag['detail']}")
 			print(f"  [{task_name}] {len(flags)} flags\n")
 			all_flags.extend(flags)
+
+		elif defaults["type"] == "morph_llm":
+			from . import tense_rules
+
+			morph_flags, candidate_ids = tense_rules.run(parsed_blocks)
+			all_flags.extend(morph_flags)
+
+			if candidate_ids:
+				model = getattr(args, f"model_{task_name}", defaults["model"])
+				think = defaults.get("think", True) and not args.no_think
+				amb_count = sum(len(v) for v in candidate_ids.values())
+
+				print(f"=== tense Layer 2 ({model}, {amb_count} ambiguous "
+					  f"in {len(candidate_ids)} sentences) ===")
+				flags, failed_sent_ids = llm_classifier.run(
+					blocks, parsed_blocks,
+					task_name=task_name,
+					model=model,
+					think=think,
+					candidate_ids=candidate_ids,
+				)
+				all_flags.extend(flags)
+
+				ensemble = defaults.get("ensemble", [])
+				for ensemble_config in ensemble:
+					ensemble_model = ensemble_config["model"]
+					ensemble_think = ensemble_config.get("think", True) and not args.no_think
+					print(f"=== tense Layer 2 ({ensemble_model}, ensemble) ===")
+					ensemble_flags, _ = llm_classifier.run(
+						blocks, parsed_blocks,
+						task_name=task_name,
+						model=ensemble_model,
+						think=ensemble_think,
+						candidate_ids=candidate_ids,
+					)
+					all_flags.extend(ensemble_flags)
+			else:
+				print("  No ambiguous tokens, skipping LLM tense\n")
 
 		elif defaults["type"] == "llm":
 			model = getattr(args, f"model_{task_name}", defaults["model"])
@@ -169,7 +210,7 @@ def main():
 					  f'suggested="{suggested}"')
 				continue
 
-		elif task == "tense":
+		elif task in ("tense", "tense_morph"):
 			current = flag.get("current", "")
 			expected = flag.get("expected", "")
 			if not expected or expected == "None" or expected == current:
@@ -221,10 +262,12 @@ def main():
 			if task == "littre" and issue != "lemma_not_found":
 				return "littre_upos"
 			return "lemma"
+		if task in ("tense", "tense_morph"):
+			return "tense"
 		return task
 
-	# Within a category, prefer littre over llm
-	category_priority = {"littre": 0, "lemma": 1}
+	# Within a category, prefer deterministic over llm
+	category_priority = {"littre": 0, "tense_morph": 0, "lemma": 1}
 	seen = {}
 	for flag in all_flags:
 		token_id = flag.get("token_id") or flag.get("id")
