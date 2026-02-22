@@ -688,9 +688,7 @@ def process_stanza_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwri
 # CoreNLP backend
 # -----------------------------------------------------------------------------
 
-def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=False, corenlp_url=None):
-	from stanza.server import CoreNLPClient
-	
+def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=False, corenlp_url=None, ssplit="two", threads=None):
 	input_dir = Path(input_dir)
 	output_dir = Path(output_dir)
 	output_dir.mkdir(parents=True, exist_ok=True)
@@ -701,10 +699,11 @@ def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=Fals
 		return
 	
 	ext = ".json" if fmt == "json" else ".conllu"
-	props = {"pipelineLanguage": lang}
+	props = build_corenlp_props(lang, ssplit)
+	print(f"CoreNLP props: {props}", file=sys.stderr)
 	annotators = ["tokenize", "ssplit", "pos", "lemma", "depparse"]
 	
-	with make_corenlp_client(corenlp_url, annotators=annotators, properties=props) as client:
+	with make_corenlp_client(corenlp_url, annotators=annotators, properties=props, threads=threads) as client:
 		for filepath in files:
 			print(f"  {filepath.name}", file=sys.stderr)
 			text = filepath.read_text(encoding="utf-8")
@@ -717,17 +716,19 @@ def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=Fals
 				
 				for sent in doc.sentence:
 					sent_idx += 1
+					old_to_new = {tok.tokenEndIndex: i for i, tok in enumerate(sent.token, 1)}
+					old_to_new[0] = 0
 					tokens = []
-					for tok in sent.token:
+					for new_id, tok in enumerate(sent.token, 1):
 						dep = next((e for e in sent.basicDependencies.edge if e.target == tok.tokenEndIndex), None)
 						tokens.append({
-							"id": tok.tokenEndIndex,
+							"id": new_id,
 							"form": tok.word,
 							"lemma": tok.lemma or "_",
 							"upos": tok.pos or "_",
 							"xpos": "_",
 							"feats": "_",
-							"head": dep.source if dep else 0,
+							"head": old_to_new.get(dep.source, 0) if dep else 0,
 							"deprel": dep.dep if dep else "root",
 							"deps": "_",
 							"misc": "_",
@@ -974,7 +975,7 @@ Examples:
 		)
 	elif args.backend == "corenlp":
 		process_corenlp(
-			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite, args.corenlp_url
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite, args.corenlp_url, args.ssplit, args.threads
 		)
 	elif args.backend == "spacy":
 		process_spacy(
