@@ -5,14 +5,18 @@ Annotation pipeline for the isosceles corpus.
 Backends:
   stanza         - Stanza for tokenization and parsing (baseline)
   stanza+corenlp - CoreNLP segmentation + Stanza parsing
-  corenlp        - CoreNLP for everything (requires CORENLP_HOME)
+  corenlp        - CoreNLP for everything (requires CORENLP_HOME or --corenlp-url)
   spacy          - CoreNLP segmentation + spaCy parsing
   spacy+llm      - CoreNLP segmentation + spaCy parsing + LLM corrections
+
+All CoreNLP-using backends support --corenlp-url to connect to a
+standalone CoreNLP server, bypassing stanza's wrapper entirely.
 
 Examples:
   python annotate.py data/maupassant/fr/txt data/maupassant/fr/conllu -l fr -b spacy
   python annotate.py data/eltec/fr/txt data/gold -l fr -b spacy+llm \\
       -m claude-opus-4-5 --chunks 1 --chunk-size 20 --seed 42
+  python annotate.py data/txt data/conllu -l fr -b spacy --corenlp-url http://localhost:9000
 """
 import argparse
 import json
@@ -21,12 +25,101 @@ import random
 import re
 import sys
 import copy
+import requests
 from pathlib import Path
 from conllu_tools import (
 	apply_corrections,
 	validate_tree,
 	apply_deterministic_fixes,
 )
+
+
+# -----------------------------------------------------------------------------
+# Native CoreNLP HTTP client (no stanza dependency)
+# -----------------------------------------------------------------------------
+
+class _Obj:
+	"""Attribute-access wrapper for dicts."""
+	def __init__(self, **kwargs):
+		self.__dict__.update(kwargs)
+
+
+def _wrap_corenlp_json(data):
+	"""Convert CoreNLP JSON response into objects matching the protobuf interface."""
+	sentences = []
+	for sent_json in data.get("sentences", []):
+		tokens = []
+		for tok_json in sent_json.get("tokens", []):
+			tokens.append(_Obj(
+				word=tok_json.get("word", ""),
+				after=tok_json.get("after", ""),
+				before=tok_json.get("before", ""),
+				lemma=tok_json.get("lemma", ""),
+				pos=tok_json.get("pos", ""),
+				tokenEndIndex=tok_json.get("index", 0),
+			))
+
+		edges = []
+		for dep_json in sent_json.get("basicDependencies", []):
+			edges.append(_Obj(
+				source=dep_json.get("governor", 0),
+				target=dep_json.get("dependent", 0),
+				dep=dep_json.get("dep", ""),
+			))
+
+		sentences.append(_Obj(
+			token=tokens,
+			basicDependencies=_Obj(edge=edges),
+		))
+
+	return _Obj(sentence=sentences)
+
+
+class NativeCoreNLPClient:
+	"""
+	Drop-in replacement for stanza.server.CoreNLPClient that talks
+	to an already-running CoreNLP server over HTTP.
+	"""
+
+	def __init__(self, url, annotators=None, properties=None):
+		self.url = url.rstrip("/")
+		self.annotators = annotators or ["tokenize", "ssplit"]
+		self.default_properties = properties or {}
+
+	def __enter__(self):
+		return self
+
+	def __exit__(self, *args):
+		pass
+
+	def annotate(self, text, properties=None):
+		props = {**self.default_properties}
+		if properties:
+			props.update(properties)
+		props.setdefault("annotators", ",".join(self.annotators))
+		props["outputFormat"] = "json"
+
+		response = requests.post(
+			self.url,
+			params={"properties": json.dumps(props)},
+			data=text.encode("utf-8"),
+			headers={"Content-Type": "text/plain; charset=utf-8"},
+		)
+		response.raise_for_status()
+		return _wrap_corenlp_json(response.json())
+
+
+def make_corenlp_client(corenlp_url=None, annotators=None, properties=None, threads=None, be_quiet=True):
+	"""Factory: returns NativeCoreNLPClient if url given, else stanza's."""
+	if corenlp_url:
+		return NativeCoreNLPClient(corenlp_url, annotators=annotators, properties=properties)
+	from stanza.server import CoreNLPClient
+	return CoreNLPClient(
+		annotators=annotators,
+		properties=properties,
+		threads=threads or 5,
+		be_quiet=be_quiet,
+	)
 
 
 # -----------------------------------------------------------------------------
@@ -543,9 +636,8 @@ def segment_and_parse_stanza(text, doc_id, corenlp_client, stanza_nlp, props):
 	return sentences
 
 
-def process_stanza_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=False, ssplit="two", threads=None):
+def process_stanza_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=False, ssplit="two", threads=None, corenlp_url=None):
 	import stanza
-	from stanza.server import CoreNLPClient
 
 	input_dir = Path(input_dir)
 	output_dir = Path(output_dir)
@@ -582,12 +674,7 @@ def process_stanza_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwri
 		)
 	ext = ".json" if fmt == "json" else ".conllu"
 
-	with CoreNLPClient(
-		annotators=["tokenize", "ssplit"],
-		properties=props,
-		threads=threads or 5,
-		be_quiet=True
-	) as client:
+	with make_corenlp_client(corenlp_url, annotators=["tokenize", "ssplit"], properties=props, threads=threads) as client:
 		for filepath in files:
 			print(f"  {filepath.name}", file=sys.stderr)
 			text = filepath.read_text(encoding="utf-8")
@@ -601,7 +688,7 @@ def process_stanza_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwri
 # CoreNLP backend
 # -----------------------------------------------------------------------------
 
-def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=False):
+def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=False, corenlp_url=None):
 	from stanza.server import CoreNLPClient
 	
 	input_dir = Path(input_dir)
@@ -615,12 +702,9 @@ def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=Fals
 	
 	ext = ".json" if fmt == "json" else ".conllu"
 	props = {"pipelineLanguage": lang}
+	annotators = ["tokenize", "ssplit", "pos", "lemma", "depparse"]
 	
-	with CoreNLPClient(
-		annotators=["tokenize", "ssplit", "pos", "lemma", "depparse"],
-		properties=props,
-		be_quiet=True
-	) as client:
+	with make_corenlp_client(corenlp_url, annotators=annotators, properties=props) as client:
 		for filepath in files:
 			print(f"  {filepath.name}", file=sys.stderr)
 			text = filepath.read_text(encoding="utf-8")
@@ -660,9 +744,7 @@ def process_corenlp(input_dir, output_dir, lang, fmt, limit=None, overwrite=Fals
 # spaCy backend (CoreNLP segmentation + spaCy parsing)
 # -----------------------------------------------------------------------------
 
-def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False, ssplit="two", threads=None):
-	from stanza.server import CoreNLPClient
-	
+def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False, ssplit="two", threads=None, corenlp_url=None):
 	input_dir = Path(input_dir)
 	output_dir = Path(output_dir)
 	output_dir.mkdir(parents=True, exist_ok=True)
@@ -679,12 +761,7 @@ def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False,
 	nlp = load_spacy_model(lang, "single_sentence_spacy")
 	ext = ".json" if fmt == "json" else ".conllu"
 	
-	with CoreNLPClient(
-		annotators=["tokenize", "ssplit"],
-		properties=props,
-		threads=threads or 5,
-		be_quiet=True
-	) as client:
+	with make_corenlp_client(corenlp_url, annotators=["tokenize", "ssplit"], properties=props, threads=threads) as client:
 		for filepath in files:
 			print(f"  {filepath.name}", file=sys.stderr)
 			text = filepath.read_text(encoding="utf-8")
@@ -700,9 +777,7 @@ def process_spacy(input_dir, output_dir, lang, fmt, limit=None, overwrite=False,
 
 def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overwrite=False,
 					  prompt_path=None, chunks=None, chunk_size=20, seed=None, ssplit="two", threads=None,
-					  mode="full"):
-	from stanza.server import CoreNLPClient
-	
+					  mode="full", corenlp_url=None):
 	input_dir = Path(input_dir)
 	output_dir = Path(output_dir)
 	output_dir.mkdir(parents=True, exist_ok=True)
@@ -746,12 +821,7 @@ def process_spacy_llm(input_dir, output_dir, lang, fmt, model, limit=None, overw
 		"sentences": 0,
 	}
 	
-	with CoreNLPClient(
-		annotators=["tokenize", "ssplit"],
-		properties=props,
-		threads=threads or 5,
-		be_quiet=True
-	) as client:
+	with make_corenlp_client(corenlp_url, annotators=["tokenize", "ssplit"], properties=props, threads=threads) as client:
 		for filepath in files:
 			print(f"  {filepath.name}", file=sys.stderr)
 			text = filepath.read_text(encoding="utf-8")
@@ -858,14 +928,17 @@ Examples:
 	ap.add_argument("--ssplit", choices=["always", "never", "two"], default="two",
 					help="Newline sentence break mode (default: two)")
 	ap.add_argument("--threads", "-t", type=int, default=5, help="CoreNLP threads (default: 5)")
+	ap.add_argument("--corenlp-url", default=None,
+					help="URL of a running CoreNLP server (e.g. http://localhost:9000). "
+					     "Bypasses stanza's CoreNLPClient.")
 	ap.add_argument("--mode", choices=["full", "surface"], default="surface",
 					help="LLM correction mode: full (structural) or surface (lemma/upos/feats) (default: surface)")
 	args = ap.parse_args()
 	
 	# Validation
 	if args.backend in ("corenlp", "stanza+corenlp", "spacy", "spacy+llm"):
-		if not os.environ.get("CORENLP_HOME"):
-			sys.exit("Error: CORENLP_HOME not set")
+		if not args.corenlp_url and not os.environ.get("CORENLP_HOME"):
+			sys.exit("Error: CORENLP_HOME not set (or use --corenlp-url)")
 	
 	if args.backend == "spacy+llm":
 		if not args.model:
@@ -882,6 +955,8 @@ Examples:
 	print(f"Output: {args.output_dir}", file=sys.stderr)
 	if args.backend in ("stanza+corenlp", "spacy", "spacy+llm", "corenlp"):
 		print(f"Sentence split: newline={args.ssplit}, threads={args.threads}", file=sys.stderr)
+		if args.corenlp_url:
+			print(f"CoreNLP server: {args.corenlp_url}", file=sys.stderr)
 	if args.backend == "spacy+llm":
 		print(f"LLM: {args.model}, mode={args.mode}", file=sys.stderr)
 	if args.chunks:
@@ -895,21 +970,21 @@ Examples:
 		)
 	elif args.backend == "stanza+corenlp":
 		process_stanza_corenlp(
-			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite, args.ssplit, args.threads
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite, args.ssplit, args.threads, args.corenlp_url
 		)
 	elif args.backend == "corenlp":
 		process_corenlp(
-			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite, args.corenlp_url
 		)
 	elif args.backend == "spacy":
 		process_spacy(
-			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite, args.ssplit, args.threads
+			args.input_dir, args.output_dir, args.lang, args.format, args.limit, args.overwrite, args.ssplit, args.threads, args.corenlp_url
 		)
 	elif args.backend == "spacy+llm":
 		process_spacy_llm(
 			args.input_dir, args.output_dir, args.lang, args.format, args.model,
 			args.limit, args.overwrite, args.prompt, args.chunks, args.chunk_size, args.seed,
-			args.ssplit, args.threads, args.mode
+			args.ssplit, args.threads, args.mode, args.corenlp_url
 		)
 	
 	print("\nDone.", file=sys.stderr)
