@@ -126,6 +126,53 @@ class CompareResult:
 				print(f"    {cat}: {n}")
 			print()
 
+	def field_counts(self, form, field_name, case_sensitive=False):
+		"""Count field values per pipeline for a given surface form.
+
+		Returns: {pipeline: {value: count}}
+
+		Example:
+		    result.field_counts("prie", "lemma")
+		    → {'stanza': {'prier': 8, 'prendre': 1}, 'spacy': {'prier': 9}}
+		"""
+		counts = {name: {} for name in self.pipeline_names}
+		for tc in self.all_comparisons():
+			match = tc.form == form if case_sensitive else tc.form.lower() == form.lower()
+			if not match:
+				continue
+			for name, tok in tc.pipelines.items():
+				val = tok.get(field_name, "_")
+				counts[name][val] = counts[name].get(val, 0) + 1
+		return counts
+
+	def cross_tabulate(self, form, field_name, when_pipeline, when_value,
+					   case_sensitive=False):
+		"""When one pipeline maps a form to a specific value, what do others say?
+
+		Returns: {pipeline: {value: count}} (excluding when_pipeline)
+
+		Example:
+		    result.cross_tabulate("prie", "lemma", "stanza", "prendre")
+		    → {'spacy': {'prier': 1}}
+		"""
+		counts = {
+			name: {} for name in self.pipeline_names
+			if name != when_pipeline
+		}
+		for tc in self.all_comparisons():
+			match = tc.form == form if case_sensitive else tc.form.lower() == form.lower()
+			if not match:
+				continue
+			when_tok = tc.pipelines.get(when_pipeline)
+			if not when_tok or when_tok.get(field_name, "_") != when_value:
+				continue
+			for name, tok in tc.pipelines.items():
+				if name == when_pipeline:
+					continue
+				val = tok.get(field_name, "_")
+				counts[name][val] = counts[name].get(val, 0) + 1
+		return counts
+
 
 def _read_file(path):
 	"""Read CoNLL-U file into {sent_id: (sent_text, tokens)} dict."""
