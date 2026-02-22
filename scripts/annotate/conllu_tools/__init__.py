@@ -19,6 +19,13 @@ from .llm_corrector import (
 	correct_sentences,
 )
 
+from .compare import (
+	compare_files,
+	compare_parsed,
+	CompareResult,
+	TokenComparison,
+)
+
 __all__ = [
 	"parse_conllu_block",
 	"tokens_to_conllu",
@@ -33,4 +40,8 @@ __all__ = [
 	"apply_corrections",
 	"correct_sentence",
 	"correct_sentences",
+	"compare_files",
+	"compare_parsed",
+	"CompareResult",
+	"TokenComparison",
 ]
