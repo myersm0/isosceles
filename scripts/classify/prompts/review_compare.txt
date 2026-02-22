@@ -1,0 +1,6 @@
+FLAGGED TOKEN: id={token_id}, form="{form}", upos={upos}, feats={feats}
+CURRENT LEMMA (Stanza): {lemma}
+ALTERNATIVE LEMMA (spaCy): {suggested}
+NOTE: {reason}
+Determine the correct lemma for this form in context.
+If the lemma changes, also check whether UPOS or features need updating.

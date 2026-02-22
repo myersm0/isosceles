@@ -4,6 +4,9 @@ task_defaults = {
 	"littre": {
 		"type": "dictionary",
 	},
+	"compare": {
+		"type": "compare",
+	},
 	"lemma": {
 		"type": "llm",
 		"model": "mistral-small3.2:24b",

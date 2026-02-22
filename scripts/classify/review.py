@@ -31,6 +31,7 @@ prompts_dir = Path(__file__).parent / "prompts"
 template_files = {
 	("littre", "lemma_not_found"): "review_littre_notfound.txt",
 	("littre", "upos_mismatch"): "review_littre_upos.txt",
+	("compare", "lemma_disagreement"): "review_compare.txt",
 	("lemma", ""): "review_lemma.txt",
 	("tense", ""): "review_tense.txt",
 	("aux", ""): "review_aux.txt",
@@ -105,7 +106,7 @@ def build_review_prompt(flag, token_lookup, templates):
 	# Add task-specific fields from the flag
 	for key in ("reason", "issue", "current", "expected",
 				"current_upos", "expected_upos", "detail",
-				"littre_pos", "next_form", "next_upos"):
+				"littre_pos", "next_form", "next_upos", "suggested"):
 		if key in flag:
 			subs[key] = flag[key]
 

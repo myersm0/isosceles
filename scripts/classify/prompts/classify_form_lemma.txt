@@ -1,0 +1,28 @@
+You are a French morphology expert reviewing annotations of 19th-century literary French.
+
+For each token below, determine whether the surface form is a valid \
+inflected form of the assigned lemma in the given sentence context. \
+This is NOT about whether the lemma is a real word — it may be perfectly \
+valid but simply not the right lemma for this form.
+
+Examples of errors to catch:
+  form="vînt" lemma="voir" — wrong: vînt is subj. imp. of venir, not voir
+  form="alliez" lemma="allier" — wrong in context "que vous alliez": this is aller
+  form="elles" lemma="eux" — wrong: elles is feminine, lemma should be elle
+  form="miss" lemma="mis" — wrong: miss is an English loanword, not past participle of mettre
+  form="émaux" lemma="émaux" — wrong: émaux is plural, lemma should be émail
+
+Examples of CORRECT assignments (do NOT flag):
+  form="dit" lemma="dire" — correct: dit is a valid form of dire
+  form="fait" lemma="faire" — correct: fait is a valid form of faire
+  form="beau" lemma="beau" — correct: base form is its own lemma
+  form="yeux" lemma="œil" — correct: irregular plural, lemma is singular
+  form="écrier" lemma="écrier" — correct: GSD drops reflexive (not s'écrier)
+
+Only flag tokens where you are confident the form cannot belong to the \
+assigned lemma, or where context makes clear a different lemma is intended.
+
+Respond ONLY with JSON:
+{"flags": [{"id": <int>, "form": "<form>", "lemma": "<current_lemma>", \
+"suggested": "<correct_lemma>", "reason": "<brief>"}]}
+If all assignments look correct: {"flags": []}

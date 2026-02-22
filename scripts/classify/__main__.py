@@ -28,6 +28,7 @@ import time
 from .conllu import read_conllu, parse_block, parse_feats
 from .config import task_defaults, all_tasks
 from . import littre as littre_mod
+from . import compare_task
 from . import llm_classifier
 from . import tense_rules
 from .ollama_client import call_ollama
@@ -39,6 +40,8 @@ def build_parser():
 	)
 	parser.add_argument("input", help="CoNLL-U file to classify")
 	parser.add_argument("--db", help="Path to littre.db (required for littre task)")
+	parser.add_argument("--spacy-dir",
+		help="Directory containing spaCy CoNLL-U files (required for compare task)")
 	parser.add_argument(
 		"--tasks", default="all",
 		help=f"Comma-separated task list, or 'all' (default: all). "
@@ -95,6 +98,20 @@ def run_classifiers(args, blocks, parsed_blocks, tasks):
 					  f"\"{flag['form']}\" lemma=\"{flag['lemma']}\" "
 					  f"({flag['upos']}): {flag['issue']} — {flag['detail']}")
 			print(f"  [{task_name}] {len(flags)} flags\n")
+			all_flags.extend(flags)
+
+		elif defaults["type"] == "compare":
+			littre_checker = None
+			if args.db:
+				littre_checker = littre_mod.LittreChecker(args.db)
+			flags = compare_task.run(
+				stanza_path=args.input,
+				spacy_dir=args.spacy_dir,
+				parsed_blocks=parsed_blocks,
+				littre_checker=littre_checker,
+			)
+			if littre_checker:
+				littre_checker.close()
 			all_flags.extend(flags)
 
 		elif defaults["type"] == "morph_llm":
@@ -192,6 +209,10 @@ def main():
 			print("--db required for littre task", file=sys.stderr)
 			sys.exit(1)
 
+		if "compare" in tasks and not args.spacy_dir:
+			print("--spacy-dir required for compare task", file=sys.stderr)
+			sys.exit(1)
+
 		all_flags = run_classifiers(args, blocks, parsed_blocks, tasks)
 
 	# --- Self-contradiction filter ---
@@ -253,11 +274,11 @@ def main():
 		print(f"Saved {len(all_flags)} flags to {args.flags_out}\n")
 
 	# --- Deduplicate flags by (sent_id, token_id, issue_category) ---
-	# littre:lemma_not_found and lemma are the same category (both flag bad lemmas)
+	# littre:lemma_not_found, compare, and lemma are the same category
 	# Everything else is its own category
 	def flag_category(flag):
 		task = flag["task"]
-		if task in ("littre", "lemma"):
+		if task in ("littre", "lemma", "compare"):
 			issue = flag.get("issue", "")
 			if task == "littre" and issue != "lemma_not_found":
 				return "littre_upos"
@@ -267,7 +288,7 @@ def main():
 		return task
 
 	# Within a category, prefer deterministic over llm
-	category_priority = {"littre": 0, "tense_morph": 0, "lemma": 1}
+	category_priority = {"littre": 0, "tense_morph": 0, "compare": 0, "lemma": 1}
 	seen = {}
 	for flag in all_flags:
 		token_id = flag.get("token_id") or flag.get("id")
