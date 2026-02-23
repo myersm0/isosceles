@@ -32,6 +32,7 @@ template_files = {
 	("littre", "lemma_not_found"): "review_littre_notfound.txt",
 	("littre", "upos_mismatch"): "review_littre_upos.txt",
 	("compare", "lemma_disagreement"): "review_compare.txt",
+	("compare_tense", "tense_disagreement"): "review_compare_tense.txt",
 	("lemma", ""): "review_lemma.txt",
 	("tense", ""): "review_tense.txt",
 	("aux", ""): "review_aux.txt",

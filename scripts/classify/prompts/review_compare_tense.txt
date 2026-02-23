@@ -1,0 +1,10 @@
+FLAGGED TOKEN: id={token_id}, form="{form}", lemma="{lemma}", upos={upos}, feats={feats}
+ISSUE: Stanza and spaCy disagree on tense/mood for this finite verb.
+STANZA: {current}
+SPACY: {expected}
+CRITICAL REMINDERS:
+- Tense=Imp means IMPARFAIT (imperfect), NOT imperative. Do not change correct imparfait tags.
+- Tense=Past means PASSÉ SIMPLE. Many 1sg/3sg passé simple forms look like present tense.
+- Mood=Cnd is conditional. The -ais/-ait endings are shared with imparfait, but conditional has a future stem.
+- Consider the narrative context: is this a completed action (passé simple), ongoing/habitual (imparfait), or conditional?
+Determine the correct tense/mood for this form in context. If the current annotation is wrong, provide corrected feats. Otherwise no_change.

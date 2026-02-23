@@ -275,6 +275,7 @@ def main():
 
 	# --- Deduplicate flags by (sent_id, token_id, issue_category) ---
 	# littre:lemma_not_found, compare, and lemma are the same category
+	# compare_tense, tense, tense_morph are the same category
 	# Everything else is its own category
 	def flag_category(flag):
 		task = flag["task"]
@@ -283,12 +284,15 @@ def main():
 			if task == "littre" and issue != "lemma_not_found":
 				return "littre_upos"
 			return "lemma"
-		if task in ("tense", "tense_morph"):
+		if task in ("tense", "tense_morph", "compare_tense"):
 			return "tense"
 		return task
 
 	# Within a category, prefer deterministic over llm
-	category_priority = {"littre": 0, "tense_morph": 0, "compare": 0, "lemma": 1}
+	category_priority = {
+		"littre": 0, "tense_morph": 0, "compare": 0, "compare_tense": 0,
+		"lemma": 1,
+	}
 	seen = {}
 	for flag in all_flags:
 		token_id = flag.get("token_id") or flag.get("id")
