@@ -151,9 +151,10 @@ def parse_results(results):
 				text += block.get("text", "")
 
 		from .review import extract_json, ASSISTANT_PREFILL
-		response = extract_json(ASSISTANT_PREFILL + text)
+		full_text = ASSISTANT_PREFILL + text
+		response = extract_json(full_text)
 		if response is None:
-			errors.append((custom_id, "parse_error", text[:100]))
+			errors.append((custom_id, "parse_error", repr(full_text[:300])))
 			continue
 
 		action = response.get("action")
