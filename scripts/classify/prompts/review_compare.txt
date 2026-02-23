@@ -2,5 +2,7 @@ FLAGGED TOKEN: id={token_id}, form="{form}", upos={upos}, feats={feats}
 CURRENT LEMMA (Stanza): {lemma}
 ALTERNATIVE LEMMA (spaCy): {suggested}
 NOTE: {reason}
+CONVENTION REMINDERS:
+- GSD convention: gendered nouns use the masculine singular form as lemma (e.g., amante → amant, institutrice → instituteur, comtesse → comte). The actual gender is captured in the 'Gender' morphological feature.
 Determine the correct lemma for this form in context.
 If the lemma changes, also check whether UPOS or features need updating.

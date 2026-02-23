@@ -5,4 +5,5 @@ CRITICAL REMINDERS:
 - Tense=Imp means IMPARFAIT (imperfect), NOT imperative. Do not change correct imparfait tags.
 - Tense=Past means PASSÉ SIMPLE. Many 1sg/3sg passé simple forms look like present tense.
 - Mood=Cnd is conditional. The -ais/-ait endings are shared with imparfait, but conditional has a future stem.
+- COMPOUND TENSES: In passé composé ("j'ai vu", "elle a dit"), the auxiliary keeps its OWN tense — "ai" and "a" are Tense=Pres, NOT Tense=Past. The pastness is expressed by the participle. Do NOT change the auxiliary's tense to Past. Passé simple of avoir is "eus/eut/eurent", not "ai/a/ont". Similarly, in plus-que-parfait ("j'avais vu"), the auxiliary is Tense=Imp.
 If the current annotation is wrong, provide corrected feats. Otherwise no_change.
