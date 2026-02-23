@@ -138,7 +138,6 @@ def build_review_prompt(flag, token_lookup, templates):
 def extract_json(text):
 	"""Extract JSON object from text that may contain reasoning before/after."""
 	text = text.strip()
-	# Strip markdown fences
 	if text.startswith("```"):
 		text = text.split("\n", 1)[1] if "\n" in text else text[3:]
 		if text.endswith("```"):
@@ -146,26 +145,40 @@ def extract_json(text):
 		text = text.strip()
 	# Try direct parse first
 	try:
-		return json.loads(text)
+		obj = json.loads(text)
 	except json.JSONDecodeError:
-		pass
-	# Find {"action" in the text
-	idx = text.find('{"action"')
-	if idx < 0:
+		obj = None
+	if obj is None:
+		# Find {"action" in the text
+		idx = text.find('{"action"')
+		if idx < 0:
+			return None
+		depth = 0
+		for i in range(idx, len(text)):
+			if text[i] == "{":
+				depth += 1
+			elif text[i] == "}":
+				depth -= 1
+				if depth == 0:
+					try:
+						obj = json.loads(text[idx:i + 1])
+					except json.JSONDecodeError:
+						return None
+					break
+	if obj is None:
 		return None
-	# Find matching closing brace
-	depth = 0
-	for i in range(idx, len(text)):
-		if text[i] == "{":
-			depth += 1
-		elif text[i] == "}":
-			depth -= 1
-			if depth == 0:
-				try:
-					return json.loads(text[idx:i + 1])
-				except json.JSONDecodeError:
-					return None
-	return None
+	# Normalize nested action: {"action": {"correct": {...}}} → {"action": "correct", "fields": {...}}
+	action = obj.get("action")
+	if isinstance(action, dict):
+		if len(action) == 1:
+			action_name, action_val = next(iter(action.items()))
+			obj["action"] = action_name
+			if isinstance(action_val, dict) and "fields" not in obj:
+				obj["fields"] = action_val
+	return obj
+
+
+ASSISTANT_PREFILL = '{"action":'
 
 
 def call_sonnet(system_prompt, user_prompt, model=DEFAULT_MODEL):
@@ -181,6 +194,7 @@ def call_sonnet(system_prompt, user_prompt, model=DEFAULT_MODEL):
 		"system": system_prompt,
 		"messages": [
 			{"role": "user", "content": user_prompt},
+			{"role": "assistant", "content": ASSISTANT_PREFILL},
 		],
 	}
 
@@ -194,7 +208,7 @@ def call_sonnet(system_prompt, user_prompt, model=DEFAULT_MODEL):
 		response = requests.post(ANTHROPIC_URL, json=payload, headers=headers, timeout=30)
 		response.raise_for_status()
 		data = response.json()
-		content = data["content"][0]["text"]
+		content = ASSISTANT_PREFILL + data["content"][0]["text"]
 		return extract_json(content)
 	except (requests.RequestException, KeyError, IndexError) as e:
 		print(f"  API error: {e}", file=sys.stderr)
@@ -217,6 +231,7 @@ def generate_batch_jsonl(flags, token_lookup, templates, system_prompt, output_p
 					"system": system_prompt,
 					"messages": [
 						{"role": "user", "content": user_prompt},
+						{"role": "assistant", "content": ASSISTANT_PREFILL},
 					],
 				},
 			}

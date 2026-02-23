@@ -150,8 +150,8 @@ def parse_results(results):
 			if block.get("type") == "text":
 				text += block.get("text", "")
 
-		from .review import extract_json
-		response = extract_json(text)
+		from .review import extract_json, ASSISTANT_PREFILL
+		response = extract_json(ASSISTANT_PREFILL + text)
 		if response is None:
 			errors.append((custom_id, "parse_error", text[:100]))
 			continue
