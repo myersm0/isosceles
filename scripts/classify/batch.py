@@ -144,6 +144,7 @@ def parse_results(results):
 			continue
 
 		message = result_data.get("message", {})
+		stop_reason = message.get("stop_reason", "?")
 		content_blocks = message.get("content", [])
 		text = ""
 		for block in content_blocks:
@@ -151,10 +152,30 @@ def parse_results(results):
 				text += block.get("text", "")
 
 		from .review import extract_json, ASSISTANT_PREFILL
-		full_text = ASSISTANT_PREFILL + text
-		response = extract_json(full_text)
+
+		# First try: parse response as-is (model may have returned complete JSON)
+		response = extract_json(text.strip()) if text.strip() else None
+
+		# If the raw response is a bare fields dict, wrap it
+		if response is not None and "action" not in response:
+			if any(k in response for k in ("lemma", "upos", "feats")):
+				response = {"action": "correct", "fields": response}
+			elif "reason" in response:
+				response = {"action": "no_change", "reason": response["reason"]}
+			else:
+				response = None
+
+		# Second try: prepend prefill and parse
 		if response is None:
-			errors.append((custom_id, "parse_error", repr(full_text[:300])))
+			full_text = ASSISTANT_PREFILL + text
+			response = extract_json(full_text)
+
+		if response is None:
+			full_text = ASSISTANT_PREFILL + text
+			errors.append((
+				custom_id, "parse_error",
+				f"stop={stop_reason} text={repr(full_text[:300])}",
+			))
 			continue
 
 		action = response.get("action")

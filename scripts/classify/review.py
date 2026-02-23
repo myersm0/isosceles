@@ -144,13 +144,19 @@ def extract_json(text):
 		if text.endswith("```"):
 			text = text[:-3]
 		text = text.strip()
+
+	# Repair common malformed patterns
+	if '"action":,' in text:
+		text = text.replace('"action":,', '"action": "no_change",', 1)
+	text = text.replace('{"correct"}', '"correct"')
+	text = text.replace('{"no_change"}', '"no_change"')
+
 	# Try direct parse first
 	try:
 		obj = json.loads(text)
 	except json.JSONDecodeError:
 		obj = None
 	if obj is None:
-		# Find {"action" in the text
 		idx = text.find('{"action"')
 		if idx < 0:
 			return None
@@ -168,14 +174,20 @@ def extract_json(text):
 					break
 	if obj is None:
 		return None
-	# Normalize nested action: {"action": {"correct": {...}}} → {"action": "correct", "fields": {...}}
+	# Normalize nested action variants
 	action = obj.get("action")
 	if isinstance(action, dict):
 		if len(action) == 1:
+			# {"action": {"correct": {...}}} → {"action": "correct", "fields": {...}}
 			action_name, action_val = next(iter(action.items()))
 			obj["action"] = action_name
 			if isinstance(action_val, dict) and "fields" not in obj:
 				obj["fields"] = action_val
+		elif any(k in action for k in ("lemma", "upos", "feats")):
+			# {"action": {"lemma": "x", "upos": "Y"}} → {"action": "correct", "fields": {...}}
+			obj["action"] = "correct"
+			if "fields" not in obj:
+				obj["fields"] = action
 	return obj
 
 
@@ -209,8 +221,19 @@ def call_sonnet(system_prompt, user_prompt, model=DEFAULT_MODEL):
 		response = requests.post(ANTHROPIC_URL, json=payload, headers=headers, timeout=30)
 		response.raise_for_status()
 		data = response.json()
-		content = ASSISTANT_PREFILL + data["content"][0]["text"]
-		return extract_json(content)
+		raw = data["content"][0]["text"]
+
+		result = extract_json(raw.strip()) if raw.strip() else None
+		if result is not None and "action" not in result:
+			if any(k in result for k in ("lemma", "upos", "feats")):
+				result = {"action": "correct", "fields": result}
+			elif "reason" in result:
+				result = {"action": "no_change", "reason": result["reason"]}
+			else:
+				result = None
+		if result is None:
+			result = extract_json(ASSISTANT_PREFILL + raw)
+		return result
 	except (requests.RequestException, KeyError, IndexError) as e:
 		print(f"  API error: {e}", file=sys.stderr)
 		return None
